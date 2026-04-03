@@ -9,6 +9,10 @@ enum DNSRecordType: String, CaseIterable, Codable {
     case NS
     case TXT
     case CNAME
+    case SOA
+    case SRV
+    case CAA
+    case DS
 
     var queryType: Int {
         switch self {
@@ -18,6 +22,19 @@ enum DNSRecordType: String, CaseIterable, Codable {
         case .NS: return 2
         case .TXT: return 16
         case .CNAME: return 5
+        case .SOA: return 6
+        case .SRV: return 33
+        case .CAA: return 257
+        case .DS: return 43
+        }
+    }
+
+    var usesRawDataValue: Bool {
+        switch self {
+        case .TXT, .SOA, .DS:
+            return true
+        default:
+            return false
         }
     }
 }
@@ -33,6 +50,7 @@ struct DNSSection: Identifiable, Codable {
     let recordType: DNSRecordType
     var records: [DNSRecord]
     var wildcardRecords: [DNSRecord] = []
+    var dnssecSigned: Bool?
     var error: String?
 }
 

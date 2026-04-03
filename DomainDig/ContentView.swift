@@ -54,6 +54,14 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .onAppear {
@@ -257,7 +265,16 @@ struct ContentView: View {
 
     private var dnsResultsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("DNS Records")
+            HStack(alignment: .top, spacing: 8) {
+                sectionHeader("DNS Records")
+                Spacer()
+                if let dnssecSigned = dnssecStatus {
+                    Text(dnssecSigned ? "DNSSEC ✓" : "DNSSEC ✗")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(dnssecSigned ? .green : .red)
+                        .padding(.top, 1)
+                }
+            }
 
             if viewModel.dnsLoading {
                 ProgressView("Querying DNS…")
@@ -596,6 +613,10 @@ struct ContentView: View {
             .foregroundStyle(.white)
     }
 
+    private var dnssecStatus: Bool? {
+        viewModel.dnsSections.compactMap(\.dnssecSigned).first
+    }
+
     private func certRow(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -679,6 +700,70 @@ extension DateFormatter {
         f.timeStyle = .short
         return f
     }()
+}
+
+private struct SettingsView: View {
+    @AppStorage(DNSResolverOption.userDefaultsKey)
+    private var storedResolverURL = DNSResolverOption.defaultURLString
+
+    @State private var resolverOption: DNSResolverOption = .cloudflare
+    @State private var customResolverURL = DNSResolverOption.defaultURLString
+
+    private var customResolverError: String? {
+        guard resolverOption == .custom else {
+            return nil
+        }
+
+        return DNSResolverOption.isValidCustomURL(customResolverURL)
+            ? nil
+            : "Resolver URL must start with https://"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Resolver", selection: $resolverOption) {
+                    ForEach(DNSResolverOption.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+
+                if resolverOption == .custom {
+                    TextField("https://resolver.example/dns-query", text: $customResolverURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+
+                    if let customResolverError {
+                        Text(customResolverError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Settings")
+        .onAppear {
+            let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            resolverOption = DNSResolverOption.option(for: currentResolverURL)
+            customResolverURL = resolverOption == .custom
+                ? currentResolverURL
+                : DNSResolverOption.defaultURLString
+        }
+        .onChange(of: resolverOption) { _, newValue in
+            guard let presetURL = newValue.urlString else {
+                storedResolverURL = customResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                return
+            }
+            storedResolverURL = presetURL
+        }
+        .onChange(of: customResolverURL) { _, newValue in
+            guard resolverOption == .custom else {
+                return
+            }
+            storedResolverURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
 }
 
 #Preview {
