@@ -65,7 +65,7 @@ struct HistoryDetailView: View {
     }()
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 cachedBanner
                 reachabilitySection
@@ -157,7 +157,7 @@ struct HistoryDetailView: View {
                         .background(Color(.systemGray6).opacity(0.5))
                         .cornerRadius(6)
                 } else {
-                    VStack(alignment: .leading, spacing: 4) {
+                    horizontallyScrollableCard {
                         ForEach(entry.redirectChain) { hop in
                             HStack(alignment: .top, spacing: 6) {
                                 Text("\(hop.stepNumber)")
@@ -180,9 +180,6 @@ struct HistoryDetailView: View {
                             }
                         }
                     }
-                    .padding(10)
-                    .background(Color(.systemGray6).opacity(0.5))
-                    .cornerRadius(6)
                 }
             }
         }
@@ -195,7 +192,7 @@ struct HistoryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeader("DNS Records")
             ForEach(entry.dnsSections) { section in
-                VStack(alignment: .leading, spacing: 4) {
+                horizontallyScrollableCard {
                     Text(section.recordType.rawValue)
                         .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(.semibold)
@@ -220,12 +217,9 @@ struct HistoryDetailView: View {
                         recordRows(section.wildcardRecords)
                     }
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
 
                 if section.recordType == .A {
-                    VStack(alignment: .leading, spacing: 4) {
+                    horizontallyScrollableCard {
                         Text("PTR (Reverse DNS)")
                             .font(.system(.subheadline, design: .monospaced))
                             .fontWeight(.semibold)
@@ -242,9 +236,6 @@ struct HistoryDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(10)
-                    .background(Color(.systemGray6).opacity(0.5))
-                    .cornerRadius(6)
                 }
             }
         }
@@ -259,16 +250,14 @@ struct HistoryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let email = entry.emailSecurity {
                 sectionHeader("Email Security")
-                VStack(alignment: .leading, spacing: 6) {
+                horizontallyScrollableCard(spacing: 6) {
                     historyEmailRow("SPF", record: email.spf)
                     historyEmailRow("DMARC", record: email.dmarc)
                     historyEmailRow("DKIM", record: email.dkim)
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 16)
     }
 
@@ -310,7 +299,7 @@ struct HistoryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             if let info = entry.sslInfo {
                 sectionHeader("SSL / TLS Certificate")
-                VStack(alignment: .leading, spacing: 8) {
+                horizontallyScrollableCard(spacing: 8) {
                     labelRow("Common Name", info.commonName)
                     labelRow("Issuer", info.issuer)
 
@@ -341,9 +330,6 @@ struct HistoryDetailView: View {
 
                     labelRow("Chain Depth", "\(info.chainDepth)")
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
         .padding(.top, 16)
@@ -355,7 +341,7 @@ struct HistoryDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             if !entry.httpHeaders.isEmpty {
                 sectionHeader("HTTP Headers")
-                VStack(alignment: .leading, spacing: 4) {
+                horizontallyScrollableCard {
                     ForEach(entry.httpHeaders) { header in
                         HStack(alignment: .top, spacing: 4) {
                             Text(header.name + ":")
@@ -368,9 +354,6 @@ struct HistoryDetailView: View {
                         }
                     }
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
         .padding(.top, 16)
@@ -383,14 +366,17 @@ struct HistoryDetailView: View {
             if let geo = entry.ipGeolocation {
                 sectionHeader("IP Location")
                 VStack(alignment: .leading, spacing: 6) {
-                    labelRow("IP", geo.ip)
-                    if let org = geo.org {
-                        labelRow("Org / ISP", org)
+                    horizontallyScrollableContent(spacing: 6) {
+                        labelRow("IP", geo.ip)
+                        if let org = geo.org {
+                            labelRow("Org / ISP", org)
+                        }
+                        let location = [geo.city, geo.region, geo.country_name].compactMap { $0 }.joined(separator: ", ")
+                        if !location.isEmpty {
+                            labelRow("Location", location)
+                        }
                     }
-                    let location = [geo.city, geo.region, geo.country_name].compactMap { $0 }.joined(separator: ", ")
-                    if !location.isEmpty {
-                        labelRow("Location", location)
-                    }
+
                     if let lat = geo.latitude, let lon = geo.longitude {
                         let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                         Map(initialPosition: .region(MKCoordinateRegion(
@@ -400,6 +386,7 @@ struct HistoryDetailView: View {
                             Marker(geo.ip, coordinate: coordinate)
                         }
                         .mapStyle(.standard)
+                        .frame(maxWidth: .infinity)
                         .frame(height: 180)
                         .cornerRadius(8)
                     }
@@ -479,6 +466,32 @@ struct HistoryDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func horizontallyScrollableCard<Content: View>(
+        spacing: CGFloat = 4,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        horizontallyScrollableContent(spacing: spacing) {
+            content()
+        }
+        .padding(10)
+        .background(Color(.systemGray6).opacity(0.5))
+        .cornerRadius(6)
+    }
+
+    private func horizontallyScrollableContent<Content: View>(
+        spacing: CGFloat = 4,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: spacing) {
+                content()
+            }
+            .scrollTargetLayout()
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func errorLabel(_ message: String) -> some View {

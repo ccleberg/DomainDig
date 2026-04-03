@@ -7,7 +7,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     inputSection
                     if viewModel.hasRun {
@@ -225,7 +225,7 @@ struct ContentView: View {
                     .background(Color(.systemGray6).opacity(0.5))
                     .cornerRadius(6)
             } else {
-                VStack(alignment: .leading, spacing: 4) {
+                horizontallyScrollableCard {
                     ForEach(viewModel.redirectChain) { hop in
                         HStack(alignment: .top, spacing: 6) {
                             Text("\(hop.stepNumber)")
@@ -248,9 +248,6 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
         .padding(.top, 16)
@@ -281,7 +278,7 @@ struct ContentView: View {
     }
 
     private var ptrRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        horizontallyScrollableCard {
             Text("PTR (Reverse DNS)")
                 .font(.system(.subheadline, design: .monospaced))
                 .fontWeight(.semibold)
@@ -302,13 +299,10 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(10)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(6)
     }
 
     private func dnsRecordSection(_ section: DNSSection) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        horizontallyScrollableCard {
             Text(section.recordType.rawValue)
                 .font(.system(.subheadline, design: .monospaced))
                 .fontWeight(.semibold)
@@ -334,9 +328,6 @@ struct ContentView: View {
                 dnsRecordRows(section.wildcardRecords)
             }
         }
-        .padding(10)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(6)
     }
 
     private func dnsRecordRows(_ records: [DNSRecord]) -> some View {
@@ -369,16 +360,14 @@ struct ContentView: View {
             } else if let error = viewModel.emailSecurityError {
                 errorLabel(error)
             } else if let email = viewModel.emailSecurity {
-                VStack(alignment: .leading, spacing: 6) {
+                horizontallyScrollableCard(spacing: 6) {
                     emailSecurityRow("SPF", record: email.spf)
                     emailSecurityRow("DMARC", record: email.dmarc)
                     emailSecurityRow("DKIM", record: email.dkim)
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 16)
     }
 
@@ -434,7 +423,7 @@ struct ContentView: View {
     }
 
     private func sslDetail(_ info: SSLCertificateInfo) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        horizontallyScrollableCard(spacing: 8) {
             certRow("Common Name", info.commonName)
             certRow("Issuer", info.issuer)
 
@@ -466,9 +455,6 @@ struct ContentView: View {
 
             certRow("Chain Depth", "\(info.chainDepth)")
         }
-        .padding(10)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(6)
     }
 
     // MARK: - HTTP Headers
@@ -484,7 +470,7 @@ struct ContentView: View {
             } else if let error = viewModel.httpHeadersError {
                 errorLabel(error)
             } else {
-                VStack(alignment: .leading, spacing: 4) {
+                horizontallyScrollableCard {
                     ForEach(viewModel.httpHeaders) { header in
                         HStack(alignment: .top, spacing: 4) {
                             Text(header.name + ":")
@@ -497,9 +483,6 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
             }
         }
         .padding(.top, 16)
@@ -533,14 +516,17 @@ struct ContentView: View {
 
     private func ipGeolocationDetail(_ geo: IPGeolocation) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            certRow("IP", geo.ip)
-            if let org = geo.org {
-                certRow("Org / ISP", org)
+            horizontallyScrollableContent(spacing: 6) {
+                certRow("IP", geo.ip)
+                if let org = geo.org {
+                    certRow("Org / ISP", org)
+                }
+                let location = [geo.city, geo.region, geo.country_name].compactMap { $0 }.joined(separator: ", ")
+                if !location.isEmpty {
+                    certRow("Location", location)
+                }
             }
-            let location = [geo.city, geo.region, geo.country_name].compactMap { $0 }.joined(separator: ", ")
-            if !location.isEmpty {
-                certRow("Location", location)
-            }
+
             if let lat = geo.latitude, let lon = geo.longitude {
                 let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
                 Map(initialPosition: .region(MKCoordinateRegion(
@@ -550,6 +536,7 @@ struct ContentView: View {
                     Marker(geo.ip, coordinate: coordinate)
                 }
                 .mapStyle(.standard)
+                .frame(maxWidth: .infinity)
                 .frame(height: 180)
                 .cornerRadius(8)
             }
@@ -618,6 +605,32 @@ struct ContentView: View {
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
         }
+    }
+
+    private func horizontallyScrollableCard<Content: View>(
+        spacing: CGFloat = 4,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        horizontallyScrollableContent(spacing: spacing) {
+            content()
+        }
+        .padding(10)
+        .background(Color(.systemGray6).opacity(0.5))
+        .cornerRadius(6)
+    }
+
+    private func horizontallyScrollableContent<Content: View>(
+        spacing: CGFloat = 4,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: spacing) {
+                content()
+            }
+            .scrollTargetLayout()
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func errorLabel(_ message: String) -> some View {
