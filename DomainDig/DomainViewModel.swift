@@ -115,6 +115,7 @@ final class DomainViewModel {
             reachabilityResults: reachabilityResults,
             ipGeolocation: ipGeolocation,
             emailSecurity: emailSecurity,
+            mtaSts: emailSecurity?.mtaSts,
             ptrRecord: ptrRecord,
             redirectChain: redirectChain,
             portScanResults: portScanResults,
@@ -482,7 +483,22 @@ final class DomainViewModel {
             lines.append("--------------")
             lines.append("  SPF:   \(email.spf.found ? "✓" : "✗")  \(email.spf.value ?? "No record found")")
             lines.append("  DMARC: \(email.dmarc.found ? "✓" : "✗")  \(email.dmarc.value ?? "No record found")")
-            lines.append("  DKIM:  \(email.dkim.found ? "✓" : "✗")  \(email.dkim.value ?? "No record found")")
+            let dkimValue = if let selector = email.dkim.matchedSelector,
+                               let value = email.dkim.value {
+                "\(value) (selector: \(selector))"
+            } else {
+                email.dkim.value ?? "No record found"
+            }
+            lines.append("  DKIM:  \(email.dkim.found ? "✓" : "✗")  \(dkimValue)")
+            let mtaDescription = if let mode = email.mtaSts?.policyMode {
+                "mode: \(mode)"
+            } else if email.mtaSts?.txtFound == true {
+                "Policy unavailable"
+            } else {
+                "No record found"
+            }
+            lines.append("  MTA-STS: \(email.mtaSts?.txtFound == true ? "✓" : "✗")  \(mtaDescription)")
+            lines.append("  BIMI:  \(email.bimi.found ? "✓" : "✗")  \(email.bimi.value ?? "No record found")")
         }
 
         // SSL

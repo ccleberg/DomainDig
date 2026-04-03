@@ -159,11 +159,56 @@ struct EmailSecurityResult: Codable {
     let spf: EmailSecurityRecord
     let dmarc: EmailSecurityRecord
     let dkim: EmailSecurityRecord
+    let bimi: EmailSecurityRecord
+    let mtaSts: MTASTSResult?
+
+    init(
+        spf: EmailSecurityRecord,
+        dmarc: EmailSecurityRecord,
+        dkim: EmailSecurityRecord,
+        bimi: EmailSecurityRecord = EmailSecurityRecord(found: false, value: nil),
+        mtaSts: MTASTSResult? = nil
+    ) {
+        self.spf = spf
+        self.dmarc = dmarc
+        self.dkim = dkim
+        self.bimi = bimi
+        self.mtaSts = mtaSts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        spf = try container.decode(EmailSecurityRecord.self, forKey: .spf)
+        dmarc = try container.decode(EmailSecurityRecord.self, forKey: .dmarc)
+        dkim = try container.decode(EmailSecurityRecord.self, forKey: .dkim)
+        bimi = try container.decodeIfPresent(EmailSecurityRecord.self, forKey: .bimi)
+            ?? EmailSecurityRecord(found: false, value: nil)
+        mtaSts = try container.decodeIfPresent(MTASTSResult.self, forKey: .mtaSts)
+    }
 }
 
 struct EmailSecurityRecord: Codable {
     let found: Bool
     let value: String?
+    let matchedSelector: String?
+
+    init(found: Bool, value: String?, matchedSelector: String? = nil) {
+        self.found = found
+        self.value = value
+        self.matchedSelector = matchedSelector
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        found = try container.decode(Bool.self, forKey: .found)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
+        matchedSelector = try container.decodeIfPresent(String.self, forKey: .matchedSelector)
+    }
+}
+
+struct MTASTSResult: Codable {
+    let txtFound: Bool
+    let policyMode: String?
 }
 
 // MARK: - Redirect Chain Models
@@ -197,6 +242,7 @@ struct HistoryEntry: Identifiable, Codable {
     let reachabilityResults: [PortReachability]
     let ipGeolocation: IPGeolocation?
     var emailSecurity: EmailSecurityResult?
+    var mtaSts: MTASTSResult?
     var ptrRecord: String?
     var redirectChain: [RedirectHop]
     var portScanResults: [PortScanResult]
@@ -205,7 +251,7 @@ struct HistoryEntry: Identifiable, Codable {
     init(domain: String, timestamp: Date, dnsSections: [DNSSection],
          sslInfo: SSLCertificateInfo?, httpHeaders: [HTTPHeader],
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
-         emailSecurity: EmailSecurityResult? = nil, ptrRecord: String? = nil,
+         emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ptrRecord: String? = nil,
          redirectChain: [RedirectHop] = [], portScanResults: [PortScanResult] = [],
          hstsPreloaded: Bool? = nil) {
         self.domain = domain
@@ -216,6 +262,7 @@ struct HistoryEntry: Identifiable, Codable {
         self.reachabilityResults = reachabilityResults
         self.ipGeolocation = ipGeolocation
         self.emailSecurity = emailSecurity
+        self.mtaSts = mtaSts ?? emailSecurity?.mtaSts
         self.ptrRecord = ptrRecord
         self.redirectChain = redirectChain
         self.portScanResults = portScanResults
@@ -233,6 +280,7 @@ struct HistoryEntry: Identifiable, Codable {
         reachabilityResults = try container.decode([PortReachability].self, forKey: .reachabilityResults)
         ipGeolocation = try container.decodeIfPresent(IPGeolocation.self, forKey: .ipGeolocation)
         emailSecurity = try container.decodeIfPresent(EmailSecurityResult.self, forKey: .emailSecurity)
+        mtaSts = try container.decodeIfPresent(MTASTSResult.self, forKey: .mtaSts) ?? emailSecurity?.mtaSts
         ptrRecord = try container.decodeIfPresent(String.self, forKey: .ptrRecord)
         redirectChain = try container.decodeIfPresent([RedirectHop].self, forKey: .redirectChain) ?? []
         portScanResults = try container.decodeIfPresent([PortScanResult].self, forKey: .portScanResults) ?? []

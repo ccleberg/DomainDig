@@ -254,6 +254,8 @@ struct HistoryDetailView: View {
                     historyEmailRow("SPF", record: email.spf)
                     historyEmailRow("DMARC", record: email.dmarc)
                     historyEmailRow("DKIM", record: email.dkim)
+                    historyEmailRow("MTA-STS", mtaSts: entry.mtaSts ?? email.mtaSts)
+                    historyEmailRow("BIMI", record: email.bimi)
                 }
             }
         }
@@ -267,7 +269,7 @@ struct HistoryDetailView: View {
                 Text(label)
                     .font(.system(.caption, design: .monospaced))
                     .fontWeight(.semibold)
-                    .frame(width: 52, alignment: .leading)
+                    .frame(width: 72, alignment: .leading)
                 Text(record.found ? "✓" : "✗")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(record.found ? .green : .red)
@@ -284,8 +286,37 @@ struct HistoryDetailView: View {
                                 expandedEmailField = isExpanded ? nil : label
                             }
                         }
+                    if let selector = record.matchedSelector {
+                        Text("(selector: \(selector))")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("No record found")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func historyEmailRow(_ label: String, mtaSts: MTASTSResult?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Text(label)
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .frame(width: 72, alignment: .leading)
+                Text(mtaSts?.txtFound == true ? "✓" : "✗")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(mtaSts?.txtFound == true ? .green : .red)
+                if let policyMode = mtaSts?.policyMode {
+                    Text(policyMode)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                } else {
+                    Text(mtaSts?.txtFound == true ? "Policy unavailable" : "No record found")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
