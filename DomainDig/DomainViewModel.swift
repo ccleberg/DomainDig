@@ -20,6 +20,11 @@ final class DomainViewModel {
 
     // HTTP Headers
     var httpHeaders: [HTTPHeader] = []
+    var httpSecurityGrade: String?
+    var httpStatusCode: Int?
+    var httpResponseTimeMs: Int?
+    var httpProtocol: String?
+    var http3Advertised = false
     var httpHeadersLoading = false
     var httpHeadersError: String?
 
@@ -168,6 +173,11 @@ final class DomainViewModel {
         hstsPreloaded = nil
         hstsLoading = false
         httpHeaders = []
+        httpSecurityGrade = nil
+        httpStatusCode = nil
+        httpResponseTimeMs = nil
+        httpProtocol = nil
+        http3Advertised = false
         httpHeadersError = nil
         httpHeadersLoading = false
         reachabilityResults = []
@@ -210,6 +220,11 @@ final class DomainViewModel {
         hstsPreloaded = nil
         hstsLoading = true
         httpHeaders = []
+        httpSecurityGrade = nil
+        httpStatusCode = nil
+        httpResponseTimeMs = nil
+        httpProtocol = nil
+        http3Advertised = false
         httpHeadersError = nil
         httpHeadersLoading = true
         reachabilityResults = []
@@ -300,8 +315,13 @@ final class DomainViewModel {
 
     private func runHTTPHeaders(domain: String) async {
         do {
-            let headers = try await HTTPHeadersService.fetch(domain: domain)
-            httpHeaders = headers
+            let result = try await HTTPHeadersService.fetch(domain: domain)
+            httpHeaders = result.headers
+            httpSecurityGrade = HTTPSecurityGrade.grade(for: result.headers).rawValue
+            httpStatusCode = result.statusCode
+            httpResponseTimeMs = result.responseTimeMs
+            httpProtocol = result.httpProtocol
+            http3Advertised = result.http3Advertised
         } catch {
             httpHeadersError = error.localizedDescription
         }
@@ -381,6 +401,11 @@ final class DomainViewModel {
             sslError: sslError,
             hstsPreloaded: hstsPreloaded,
             httpHeaders: httpHeaders,
+            httpSecurityGrade: httpSecurityGrade,
+            httpStatusCode: httpStatusCode,
+            httpResponseTimeMs: httpResponseTimeMs,
+            httpProtocol: httpProtocol,
+            http3Advertised: http3Advertised,
             httpHeadersError: httpHeadersError,
             reachabilityResults: reachabilityResults,
             ipGeolocation: ipGeolocation,
@@ -400,6 +425,11 @@ final class DomainViewModel {
         sslError: String? = nil,
         hstsPreloaded: Bool? = nil,
         httpHeaders: [HTTPHeader],
+        httpSecurityGrade: String? = nil,
+        httpStatusCode: Int? = nil,
+        httpResponseTimeMs: Int? = nil,
+        httpProtocol: String? = nil,
+        http3Advertised: Bool = false,
         httpHeadersError: String? = nil,
         reachabilityResults: [PortReachability],
         ipGeolocation: IPGeolocation?,
@@ -547,6 +577,21 @@ final class DomainViewModel {
             lines.append("------------")
             for header in httpHeaders {
                 lines.append("  \(header.name): \(header.value)")
+            }
+            if let httpSecurityGrade {
+                lines.append("Grade: \(httpSecurityGrade)")
+            }
+            if let httpStatusCode {
+                lines.append("Status: \(httpStatusCode)")
+            }
+            if let httpResponseTimeMs {
+                lines.append("Response Time: \(httpResponseTimeMs)ms")
+            }
+            if let httpProtocol {
+                lines.append("Protocol: \(httpProtocol)")
+            }
+            if http3Advertised {
+                lines.append("HTTP/3 Advertised: Yes")
             }
         } else if let error = httpHeadersError {
             lines.append("")

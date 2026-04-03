@@ -544,7 +544,19 @@ struct ContentView: View {
 
     private var httpHeadersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("HTTP Headers")
+            HStack(spacing: 8) {
+                sectionHeader("HTTP Headers")
+                if let grade = viewModel.httpSecurityGrade {
+                    Text(grade)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(httpSecurityGradeColor(for: grade))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(httpSecurityGradeColor(for: grade).opacity(0.18))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                Spacer()
+            }
 
             if viewModel.httpHeadersLoading {
                 ProgressView("Fetching headers…")
@@ -554,6 +566,26 @@ struct ContentView: View {
                 errorLabel(error)
             } else {
                 horizontallyScrollableCard {
+                    if !httpStatusSummaryParts.isEmpty || http3AvailabilityNote != nil {
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(Array(httpStatusSummaryParts.enumerated()), id: \.offset) { index, part in
+                                if index > 0 {
+                                    Text("  ")
+                                        .font(.system(.caption, design: .monospaced))
+                                }
+                                Text(part.text)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(part.color)
+                            }
+                            if let http3AvailabilityNote {
+                                Text("  ")
+                                    .font(.system(.caption, design: .monospaced))
+                                Text(http3AvailabilityNote)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     ForEach(viewModel.httpHeaders) { header in
                         HStack(alignment: .top, spacing: 4) {
                             Text(header.name + ":")
@@ -748,6 +780,42 @@ struct ContentView: View {
             .font(.system(.caption, design: .monospaced))
             .foregroundStyle(.red)
             .padding(8)
+    }
+
+    private var httpStatusSummaryParts: [(text: String, color: Color)] {
+        var parts: [(text: String, color: Color)] = []
+
+        if let statusCode = viewModel.httpStatusCode {
+            parts.append(("HTTP \(statusCode)", .cyan))
+        }
+        if let responseTimeMs = viewModel.httpResponseTimeMs {
+            parts.append(("\(responseTimeMs)ms", .secondary))
+        }
+        if let httpProtocol = viewModel.httpProtocol {
+            parts.append((httpProtocol, .secondary))
+        }
+
+        return parts
+    }
+
+    private var http3AvailabilityNote: String? {
+        guard viewModel.http3Advertised, viewModel.httpProtocol != "HTTP/3" else {
+            return nil
+        }
+        return "(HTTP/3 available)"
+    }
+
+    private func httpSecurityGradeColor(for grade: String) -> Color {
+        switch grade {
+        case "A", "B":
+            .green
+        case "C":
+            .yellow
+        case "D", "F":
+            .red
+        default:
+            .secondary
+        }
     }
 
     private func expiryColor(_ days: Int) -> Color {
