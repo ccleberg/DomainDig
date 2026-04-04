@@ -352,7 +352,7 @@ final class SSLSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendabl
     }
 
     func urlSession(
-        _ session: URLSession,
+        _ _: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
@@ -373,8 +373,8 @@ final class SSLSessionDelegate: NSObject, URLSessionDelegate, @unchecked Sendabl
 
 extension SSLSessionDelegate: URLSessionTaskDelegate {
     func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
+        _ _: URLSession,
+        task _: URLSessionTask,
         didFinishCollecting metrics: URLSessionTaskMetrics
     ) {
         guard let transaction = metrics.transactionMetrics.last else {

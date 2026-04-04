@@ -101,8 +101,8 @@ private final class TaskMetricsDelegate: NSObject, URLSessionTaskDelegate {
     private(set) var metrics: URLSessionTaskMetrics?
 
     func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
+        _ _: URLSession,
+        task _: URLSessionTask,
         didFinishCollecting metrics: URLSessionTaskMetrics
     ) {
         self.metrics = metrics
