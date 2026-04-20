@@ -57,8 +57,6 @@ enum DNSResolverOption: String, CaseIterable, Identifiable {
 }
 
 struct DNSLookupService {
-    private static let rrsigQueryType = 46
-    private static let dnskeyQueryType = 48
     private static let internetClass = 1
 
     static func lookup(domain: String, recordType: DNSRecordType) async throws -> [DNSRecord] {
@@ -93,7 +91,7 @@ struct DNSLookupService {
             }
     }
 
-    static func lookupAll(domain: String) async -> [DNSSection] {
+    static func lookupAll(domain: String) async -> ServiceResult<[DNSSection]> {
         typealias Result = (
             type: DNSRecordType,
             records: [DNSRecord],
@@ -109,8 +107,11 @@ struct DNSLookupService {
             resolverURLString: resolverURLString
         )
 
-        return await withTaskGroup(of: Result.self, returning: [DNSSection].self) { group in
+        let sections = await withTaskGroup(of: Result.self, returning: [DNSSection].self) { group in
             for recordType in DNSRecordType.allCases {
+                guard recordType != .PTR else {
+                    continue
+                }
                 let shouldQueryWildcard = wildcardTypes.contains(recordType)
                 group.addTask {
                     var apexRecords: [DNSRecord] = []
@@ -159,6 +160,12 @@ struct DNSLookupService {
                 (order.firstIndex(of: a.recordType) ?? 0) < (order.firstIndex(of: b.recordType) ?? 0)
             }
         }
+
+        if sections.contains(where: { !$0.records.isEmpty || !$0.wildcardRecords.isEmpty || $0.error != nil }) {
+            return .success(sections)
+        }
+
+        return .empty("No DNS records found")
     }
 
     private static func lookupResponse(
@@ -218,9 +225,15 @@ struct DNSLookupService {
         return response.authenticatedData
     }
 
-    private static func currentResolverURLString() -> String {
+    static func currentResolverURLString() -> String {
         let storedValue = UserDefaults.standard.string(forKey: DNSResolverOption.userDefaultsKey)
         return DNSResolverOption.resolvedURLString(from: storedValue)
+    }
+
+    static func currentResolverDisplayName() -> String {
+        let resolverURLString = currentResolverURLString()
+        let option = DNSResolverOption.option(for: resolverURLString)
+        return option == .custom ? resolverURLString : option.title
     }
 
     private static func validatedResolverURL(from urlString: String) throws -> URL {

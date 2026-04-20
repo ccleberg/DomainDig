@@ -1,5 +1,11 @@
 import Foundation
 
+enum ServiceResult<Value> {
+    case success(Value)
+    case empty(String)
+    case error(String)
+}
+
 // MARK: - DNS Models
 
 enum DNSRecordType: String, CaseIterable, Codable {
@@ -13,6 +19,7 @@ enum DNSRecordType: String, CaseIterable, Codable {
     case SRV
     case CAA
     case DS
+    case PTR
 
     var queryType: Int {
         switch self {
@@ -26,6 +33,7 @@ enum DNSRecordType: String, CaseIterable, Codable {
         case .SRV: return 33
         case .CAA: return 257
         case .DS: return 43
+        case .PTR: return 12
         }
     }
 
@@ -223,18 +231,34 @@ struct RedirectHop: Identifiable, Codable {
 
 // MARK: - Port Scan Models
 
+enum PortScanKind: String, Codable {
+    case standard
+    case custom
+}
+
 struct PortScanResult: Identifiable, Codable {
     var id = UUID()
     let port: UInt16
     let service: String
     let open: Bool
     var banner: String?
+    let kind: PortScanKind
+    let durationMs: Int?
 
-    nonisolated init(port: UInt16, service: String, open: Bool, banner: String? = nil) {
+    nonisolated init(
+        port: UInt16,
+        service: String,
+        open: Bool,
+        banner: String? = nil,
+        kind: PortScanKind = .standard,
+        durationMs: Int? = nil
+    ) {
         self.port = port
         self.service = service
         self.open = open
         self.banner = banner
+        self.kind = kind
+        self.durationMs = durationMs
     }
 
     init(from decoder: Decoder) throws {
@@ -244,6 +268,8 @@ struct PortScanResult: Identifiable, Codable {
         service = try container.decode(String.self, forKey: .service)
         open = try container.decode(Bool.self, forKey: .open)
         banner = try container.decodeIfPresent(String.self, forKey: .banner)
+        kind = try container.decodeIfPresent(PortScanKind.self, forKey: .kind) ?? .standard
+        durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
     }
 }
 
@@ -264,13 +290,28 @@ struct HistoryEntry: Identifiable, Codable {
     var redirectChain: [RedirectHop]
     var portScanResults: [PortScanResult]
     var hstsPreloaded: Bool?
+    var resolverDisplayName: String
+    var resolverURLString: String
+    var totalLookupDurationMs: Int?
+    var sslError: String?
+    var httpHeadersError: String?
+    var reachabilityError: String?
+    var ipGeolocationError: String?
+    var emailSecurityError: String?
+    var ptrError: String?
+    var redirectChainError: String?
+    var portScanError: String?
 
     init(domain: String, timestamp: Date, dnsSections: [DNSSection],
          sslInfo: SSLCertificateInfo?, httpHeaders: [HTTPHeader],
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
          emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ptrRecord: String? = nil,
          redirectChain: [RedirectHop] = [], portScanResults: [PortScanResult] = [],
-         hstsPreloaded: Bool? = nil) {
+         hstsPreloaded: Bool? = nil, resolverDisplayName: String, resolverURLString: String,
+         totalLookupDurationMs: Int? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
+         reachabilityError: String? = nil, ipGeolocationError: String? = nil,
+         emailSecurityError: String? = nil, ptrError: String? = nil,
+         redirectChainError: String? = nil, portScanError: String? = nil) {
         self.domain = domain
         self.timestamp = timestamp
         self.dnsSections = dnsSections
@@ -284,6 +325,17 @@ struct HistoryEntry: Identifiable, Codable {
         self.redirectChain = redirectChain
         self.portScanResults = portScanResults
         self.hstsPreloaded = hstsPreloaded
+        self.resolverDisplayName = resolverDisplayName
+        self.resolverURLString = resolverURLString
+        self.totalLookupDurationMs = totalLookupDurationMs
+        self.sslError = sslError
+        self.httpHeadersError = httpHeadersError
+        self.reachabilityError = reachabilityError
+        self.ipGeolocationError = ipGeolocationError
+        self.emailSecurityError = emailSecurityError
+        self.ptrError = ptrError
+        self.redirectChainError = redirectChainError
+        self.portScanError = portScanError
     }
 
     init(from decoder: Decoder) throws {
@@ -302,6 +354,17 @@ struct HistoryEntry: Identifiable, Codable {
         redirectChain = try container.decodeIfPresent([RedirectHop].self, forKey: .redirectChain) ?? []
         portScanResults = try container.decodeIfPresent([PortScanResult].self, forKey: .portScanResults) ?? []
         hstsPreloaded = try container.decodeIfPresent(Bool.self, forKey: .hstsPreloaded)
+        resolverDisplayName = try container.decodeIfPresent(String.self, forKey: .resolverDisplayName) ?? "Cloudflare"
+        resolverURLString = try container.decodeIfPresent(String.self, forKey: .resolverURLString) ?? DNSResolverOption.defaultURLString
+        totalLookupDurationMs = try container.decodeIfPresent(Int.self, forKey: .totalLookupDurationMs)
+        sslError = try container.decodeIfPresent(String.self, forKey: .sslError)
+        httpHeadersError = try container.decodeIfPresent(String.self, forKey: .httpHeadersError)
+        reachabilityError = try container.decodeIfPresent(String.self, forKey: .reachabilityError)
+        ipGeolocationError = try container.decodeIfPresent(String.self, forKey: .ipGeolocationError)
+        emailSecurityError = try container.decodeIfPresent(String.self, forKey: .emailSecurityError)
+        ptrError = try container.decodeIfPresent(String.self, forKey: .ptrError)
+        redirectChainError = try container.decodeIfPresent(String.self, forKey: .redirectChainError)
+        portScanError = try container.decodeIfPresent(String.self, forKey: .portScanError)
     }
 }
 

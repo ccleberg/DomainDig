@@ -35,41 +35,46 @@ struct HTTPHeadersResult {
 }
 
 struct HTTPHeadersService {
-    static func fetch(domain: String) async throws -> HTTPHeadersResult {
+    static func fetch(domain: String) async -> ServiceResult<HTTPHeadersResult> {
         let url = URL(string: "https://\(domain)")!
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "HEAD"
         let metricsDelegate = TaskMetricsDelegate()
         let startTime = Date()
 
-        let (_, response) = try await URLSession.shared.data(for: request, delegate: metricsDelegate)
-        let responseTimeMs = max(0, Int(Date().timeIntervalSince(startTime) * 1000))
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request, delegate: metricsDelegate)
+            let responseTimeMs = max(0, Int(Date().timeIntervalSince(startTime) * 1000))
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .error(URLError(.badServerResponse).localizedDescription)
+            }
+
+            let headers = httpResponse.allHeaderFields.compactMap { entry -> HTTPHeader? in
+                guard let name = entry.key as? String,
+                      let value = entry.value as? String else { return nil }
+                return HTTPHeader(name: name, value: value)
+            }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+
+            let networkProtocolName = metricsDelegate.metrics?.transactionMetrics
+                .compactMap { $0.networkProtocolName }
+                .last
+            let detectedProtocol = protocolLabel(for: networkProtocolName)
+            let altSvcValue = headerValue(named: "alt-svc", in: httpResponse)
+            let http3Advertised = altSvcValue?.localizedCaseInsensitiveContains("h3") == true
+            let result = HTTPHeadersResult(
+                headers: headers,
+                statusCode: httpResponse.statusCode,
+                responseTimeMs: responseTimeMs,
+                httpProtocol: detectedProtocol,
+                http3Advertised: http3Advertised
+            )
+
+            return headers.isEmpty ? .empty("No HTTP headers returned") : .success(result)
+        } catch {
+            return .error(error.localizedDescription)
         }
-
-        let headers = httpResponse.allHeaderFields.compactMap { entry -> HTTPHeader? in
-            guard let name = entry.key as? String,
-                  let value = entry.value as? String else { return nil }
-            return HTTPHeader(name: name, value: value)
-        }
-        .sorted { $0.name.lowercased() < $1.name.lowercased() }
-
-        let networkProtocolName = metricsDelegate.metrics?.transactionMetrics
-            .compactMap { $0.networkProtocolName }
-            .last
-        let detectedProtocol = protocolLabel(for: networkProtocolName)
-        let altSvcValue = headerValue(named: "alt-svc", in: httpResponse)
-        let http3Advertised = altSvcValue?.localizedCaseInsensitiveContains("h3") == true
-
-        return HTTPHeadersResult(
-            headers: headers,
-            statusCode: httpResponse.statusCode,
-            responseTimeMs: responseTimeMs,
-            httpProtocol: detectedProtocol,
-            http3Advertised: http3Advertised
-        )
     }
 
     private static func protocolLabel(for networkProtocolName: String?) -> String? {

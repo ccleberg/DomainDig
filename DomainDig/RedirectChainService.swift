@@ -1,12 +1,17 @@
 import Foundation
 
 struct RedirectChainService {
-    static func trace(domain: String) async throws -> [RedirectHop] {
-        // Try HTTPS first (avoids ATS issues), fall back to HTTP if it fails entirely
+    static func trace(domain: String) async -> ServiceResult<[RedirectHop]> {
         do {
-            return try await followChain(startingURL: URL(string: "https://\(domain)")!)
+            let hops = try await followChain(startingURL: URL(string: "https://\(domain)")!)
+            return hops.isEmpty ? .empty("No redirect data available") : .success(hops)
         } catch {
-            return try await followChain(startingURL: URL(string: "http://\(domain)")!)
+            do {
+                let hops = try await followChain(startingURL: URL(string: "http://\(domain)")!)
+                return hops.isEmpty ? .empty("No redirect data available") : .success(hops)
+            } catch {
+                return .error(error.localizedDescription)
+            }
         }
     }
 

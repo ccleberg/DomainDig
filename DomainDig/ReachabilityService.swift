@@ -29,10 +29,11 @@ struct ReachabilityService {
         }
     }
 
-    static func checkAll(domain: String) async -> [PortReachability] {
+    static func checkAll(domain: String) async -> ServiceResult<[PortReachability]> {
         async let port443 = check(domain: domain, port: 443)
         async let port80 = check(domain: domain, port: 80)
-        return await [port443, port80]
+        let results = await [port443, port80]
+        return results.isEmpty ? .empty("No reachability results") : .success(results)
     }
 }
 

@@ -1,5 +1,5 @@
-import SwiftUI
 import MapKit
+import SwiftUI
 
 struct ContentView: View {
     @State private var viewModel = DomainViewModel()
@@ -14,14 +14,59 @@ struct ContentView: View {
                     inputSection
                     if viewModel.hasRun {
                         actionButtons
-                        reachabilitySection
-                        redirectChainSection
-                        dnsResultsSection
-                        emailSecuritySection
-                        sslResultsSection
-                        httpHeadersSection
-                        ipGeolocationSection
-                        portScanSection
+                        SummaryView(fields: viewModel.summaryFields)
+                            .padding(.top, 8)
+                        DomainSectionView(rows: viewModel.domainRows)
+                            .padding(.top, 16)
+                        DNSSectionView(
+                            dnssecLabel: viewModel.dnssecLabel,
+                            sections: viewModel.dnsRows,
+                            ptrMessage: viewModel.ptrMessage,
+                            loading: viewModel.dnsLoading || viewModel.ptrLoading,
+                            sectionError: viewModel.dnsError
+                        )
+                        .padding(.top, 16)
+                        WebSectionView(
+                            certificateRows: viewModel.webCertificateRows,
+                            sslInfo: viewModel.sslInfo,
+                            sslLoading: viewModel.sslLoading || viewModel.hstsLoading,
+                            sslError: viewModel.sslError,
+                            responseRows: viewModel.webResponseRows,
+                            headers: viewModel.httpHeaders,
+                            headersLoading: viewModel.httpHeadersLoading,
+                            headersError: viewModel.httpHeadersError,
+                            redirects: viewModel.redirectRows,
+                            redirectLoading: viewModel.redirectChainLoading,
+                            redirectError: viewModel.redirectChainError,
+                            finalURL: viewModel.currentSnapshot.redirectChain.last?.url
+                        )
+                        .padding(.top, 16)
+                        EmailSectionView(
+                            rows: viewModel.emailRows,
+                            loading: viewModel.emailSecurityLoading,
+                            error: viewModel.emailSecurityError
+                        )
+                        .padding(.top, 16)
+                        NetworkSectionView(
+                            reachabilityRows: viewModel.reachabilityRows,
+                            reachabilityLoading: viewModel.reachabilityLoading,
+                            reachabilityError: viewModel.reachabilityError,
+                            locationRows: viewModel.locationRows,
+                            geolocation: viewModel.ipGeolocation,
+                            geolocationLoading: viewModel.ipGeolocationLoading,
+                            geolocationError: viewModel.ipGeolocationError,
+                            standardPortRows: viewModel.standardPortRows,
+                            customPortRows: viewModel.customPortRows,
+                            portScanLoading: viewModel.portScanLoading,
+                            portScanError: viewModel.portScanError,
+                            customPortScanLoading: viewModel.customPortScanLoading,
+                            customPortScanError: viewModel.customPortScanError,
+                            isCloudflareProxied: viewModel.isCloudflareProxied,
+                            customPortsExpanded: $customPortsExpanded,
+                            customPortInput: $customPortInput,
+                            onScanCustomPorts: runCustomPortScan
+                        )
+                        .padding(.top, 16)
                     } else if !viewModel.recentSearches.isEmpty {
                         recentSearchesSection
                     }
@@ -55,8 +100,6 @@ struct ContentView: View {
                         Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                             .foregroundStyle(.secondary)
                     }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
                         SettingsView()
                     } label: {
@@ -70,8 +113,6 @@ struct ContentView: View {
             domainFieldFocused = true
         }
     }
-
-    // MARK: - Input
 
     private var inputSection: some View {
         VStack(spacing: 12) {
@@ -101,8 +142,6 @@ struct ContentView: View {
         .padding(.vertical, 16)
     }
 
-    // MARK: - Action Buttons (Share + Bookmark)
-
     private var actionButtons: some View {
         HStack {
             Spacer()
@@ -123,10 +162,7 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(.top, 8)
     }
-
-    // MARK: - Recent Searches
 
     private var recentSearchesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -162,682 +198,10 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
-    // MARK: - Reachability
-
-    private var reachabilitySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Reachability")
-
-            if viewModel.reachabilityLoading {
-                ProgressView("Checking ports…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.reachabilityError {
-                errorLabel(error)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(viewModel.reachabilityResults) { result in
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(result.reachable ? Color.green : Color.red)
-                                .frame(width: 8, height: 8)
-                            Text("Port \(result.port)")
-                                .font(.system(.caption, design: .monospaced))
-                            if result.reachable, let ms = result.latencyMs {
-                                Text("\(ms)ms")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            } else if !result.reachable {
-                                Text("—")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(result.reachable ? "Reachable" : "Unreachable")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(result.reachable ? .green : .red)
-                        }
-                    }
-                }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
-            }
-        }
-        .padding(.top, 8)
-    }
-
-    // MARK: - Redirect Chain
-
-    private var redirectChainSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Redirect Chain")
-
-            if viewModel.redirectChainLoading {
-                ProgressView("Tracing redirects…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.redirectChainError {
-                errorLabel(error)
-            } else if viewModel.redirectChain.isEmpty {
-                Text("No redirect data")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-            } else if viewModel.redirectChain.count == 1,
-                      let only = viewModel.redirectChain.first,
-                      only.isFinal, !(300...399).contains(only.statusCode) {
-                Text("No redirects — direct connection")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6).opacity(0.5))
-                    .cornerRadius(6)
-            } else {
-                horizontallyScrollableCard {
-                    ForEach(viewModel.redirectChain) { hop in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text("\(hop.stepNumber)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16, alignment: .trailing)
-                            Text("\(hop.statusCode)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.cyan)
-                                .frame(width: 30, alignment: .leading)
-                            Text(hop.url)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                            if hop.isFinal {
-                                Text("(final)")
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    // MARK: - DNS Results
-
-    private var dnsResultsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 8) {
-                sectionHeader("DNS Records")
-                Spacer()
-                if let dnssecSigned = dnssecStatus {
-                    Text(dnssecSigned ? "DNSSEC ✓" : "DNSSEC ✗")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(dnssecSigned ? .green : .red)
-                        .padding(.top, 1)
-                }
-            }
-
-            if viewModel.dnsLoading {
-                ProgressView("Querying DNS…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.dnsError {
-                errorLabel(error)
-            } else {
-                ForEach(viewModel.dnsSections) { section in
-                    dnsRecordSection(section)
-                    if section.recordType == .A {
-                        ptrRow
-                    }
-                }
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    private var ptrRow: some View {
-        horizontallyScrollableCard {
-            Text("PTR (Reverse DNS)")
-                .font(.system(.subheadline, design: .monospaced))
-                .fontWeight(.semibold)
-                .foregroundStyle(.cyan)
-
-            if viewModel.ptrLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(4)
-            } else if let ptr = viewModel.ptrRecord {
-                Text(ptr)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-            } else {
-                Text("No PTR record found")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func dnsRecordSection(_ section: DNSSection) -> some View {
-        horizontallyScrollableCard {
-            Text(section.recordType.rawValue)
-                .font(.system(.subheadline, design: .monospaced))
-                .fontWeight(.semibold)
-                .foregroundStyle(.cyan)
-
-            if let error = section.error {
-                errorLabel(error)
-            } else if section.records.isEmpty {
-                Text("No records found")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            } else {
-                dnsRecordRows(section.records)
-            }
-
-            if !section.wildcardRecords.isEmpty {
-                Text("*.\(viewModel.searchedDomain)")
-                    .font(.system(.caption, design: .monospaced))
-                    .fontWeight(.medium)
-                    .foregroundStyle(.cyan.opacity(0.7))
-                    .padding(.top, 4)
-
-                dnsRecordRows(section.wildcardRecords)
-            }
-        }
-    }
-
-    private func dnsRecordRows(_ records: [DNSRecord]) -> some View {
-        ForEach(records) { record in
-            HStack(alignment: .top) {
-                Text(record.value)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                Spacer()
-                Text("TTL \(record.ttl)")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: - Email Security
-
-    @State private var expandedEmailField: String?
-
-    private var emailSecuritySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Email Security")
-
-            if viewModel.emailSecurityLoading {
-                ProgressView("Checking email records…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.emailSecurityError {
-                errorLabel(error)
-            } else if let email = viewModel.emailSecurity {
-                horizontallyScrollableCard(spacing: 6) {
-                    emailSecurityRow("SPF", record: email.spf)
-                    emailSecurityRow("DMARC", record: email.dmarc)
-                    emailSecurityRow("DKIM", record: email.dkim)
-                    emailSecurityRow("MTA-STS", mtaSts: email.mtaSts)
-                    emailSecurityRow("BIMI", record: email.bimi)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 16)
-    }
-
-    private func emailSecurityRow(_ label: String, record: EmailSecurityRecord) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .font(.system(.caption, design: .monospaced))
-                    .fontWeight(.semibold)
-                    .frame(width: 72, alignment: .leading)
-                Text(record.found ? "✓" : "✗")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(record.found ? .green : .red)
-                if let value = record.value {
-                    let isExpanded = expandedEmailField == label
-                    let displayValue = isExpanded ? value : String(value.prefix(80))
-                    Text(displayValue)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                        .lineLimit(isExpanded ? nil : 1)
-                        .onTapGesture {
-                            withAnimation {
-                                expandedEmailField = isExpanded ? nil : label
-                            }
-                        }
-                    if let selector = record.matchedSelector {
-                        Text("(selector: \(selector))")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("No record found")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private func emailSecurityRow(_ label: String, mtaSts: MTASTSResult?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .font(.system(.caption, design: .monospaced))
-                    .fontWeight(.semibold)
-                    .frame(width: 72, alignment: .leading)
-                Text(mtaSts?.txtFound == true ? "✓" : "✗")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(mtaSts?.txtFound == true ? .green : .red)
-                if let policyMode = mtaSts?.policyMode {
-                    Text(policyMode)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                } else {
-                    Text(mtaSts?.txtFound == true ? "Policy unavailable" : "No record found")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    // MARK: - SSL Results
-
-    private var sslResultsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("SSL / TLS Certificate")
-
-            if viewModel.sslLoading {
-                ProgressView("Checking certificate…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.sslError {
-                errorLabel(error)
-            } else if let info = viewModel.sslInfo {
-                sslDetail(info, domain: viewModel.searchedDomain)
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    private func sslDetail(_ info: SSLCertificateInfo, domain: String) -> some View {
-        horizontallyScrollableCard(spacing: 8) {
-            certRow("Common Name", info.commonName)
-            certRow("Issuer", info.issuer)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("SANs")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                ForEach(info.subjectAltNames, id: \.self) { san in
-                    Text(san)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
-
-            let formatter = DateFormatter.certDate
-            certRow("Valid From", formatter.string(from: info.validFrom))
-            certRow("Valid Until", formatter.string(from: info.validUntil))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Days Until Expiry")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Text("\(info.daysUntilExpiry)")
-                    .font(.system(.caption, design: .monospaced))
-                    .fontWeight(.bold)
-                    .foregroundStyle(expiryColor(info.daysUntilExpiry))
-            }
-
-            certRow("Chain Depth", "\(info.chainDepth)")
-            if viewModel.hstsLoading {
-                hstsLoadingRow
-            } else if let hstsPreloaded = viewModel.hstsPreloaded {
-                hstsStatusRow(hstsPreloaded)
-            }
-            if let tlsVersion = info.tlsVersion {
-                certRow("TLS Version", tlsVersion)
-            }
-            if let cipherSuite = info.cipherSuite {
-                certRow("Cipher Suite", cipherSuite)
-            }
-            if !info.chain.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Certificate Chain")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    ForEach(Array(info.chain.enumerated()), id: \.offset) { index, certificate in
-                        DisclosureGroup {
-                            Text(certificate.issuer)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        } label: {
-                            Text(certificate.subject)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                        }
-                        .tint(index == 0 ? .cyan : .secondary)
-                    }
-                }
-            }
-            Link("View on crt.sh →", destination: URL(string: "https://crt.sh/?q=\(domain)")!)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.cyan)
-        }
-    }
-
-    // MARK: - HTTP Headers
-
-    private var httpHeadersSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                sectionHeader("HTTP Headers")
-                if let grade = viewModel.httpSecurityGrade {
-                    Text(grade)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(httpSecurityGradeColor(for: grade))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(httpSecurityGradeColor(for: grade).opacity(0.18))
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
-                Spacer()
-            }
-
-            if viewModel.httpHeadersLoading {
-                ProgressView("Fetching headers…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.httpHeadersError {
-                errorLabel(error)
-            } else {
-                horizontallyScrollableCard {
-                    if !httpStatusSummaryParts.isEmpty || http3AvailabilityNote != nil {
-                        HStack(alignment: .top, spacing: 0) {
-                            ForEach(Array(httpStatusSummaryParts.enumerated()), id: \.offset) { index, part in
-                                if index > 0 {
-                                    Text("  ")
-                                        .font(.system(.caption, design: .monospaced))
-                                }
-                                Text(part.text)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(part.color)
-                            }
-                            if let http3AvailabilityNote {
-                                Text("  ")
-                                    .font(.system(.caption, design: .monospaced))
-                                Text(http3AvailabilityNote)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    ForEach(viewModel.httpHeaders) { header in
-                        HStack(alignment: .top, spacing: 4) {
-                            Text(header.name + ":")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(header.isSecurityHeader ? .yellow : .cyan)
-                            Text(header.value)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    // MARK: - IP Geolocation
-
-    private var ipGeolocationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("IP Location")
-
-            if viewModel.ipGeolocationLoading {
-                ProgressView("Looking up location…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let geo = viewModel.ipGeolocation {
-                ipGeolocationDetail(geo)
-            } else if let error = viewModel.ipGeolocationError {
-                if error == "No A record available" {
-                    Text("No location data available")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .padding(8)
-                } else {
-                    errorLabel(error)
-                }
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    private func ipGeolocationDetail(_ geo: IPGeolocation) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            horizontallyScrollableContent(spacing: 6) {
-                certRow("IP", geo.ip)
-                if let org = geo.org {
-                    certRow("Org / ISP", org)
-                }
-                let location = [geo.city, geo.region, geo.country_name].compactMap { $0 }.joined(separator: ", ")
-                if !location.isEmpty {
-                    certRow("Location", location)
-                }
-            }
-
-            if let lat = geo.latitude, let lon = geo.longitude {
-                let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                Map(initialPosition: .region(MKCoordinateRegion(
-                    center: coordinate,
-                    span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
-                ))) {
-                    Marker(geo.ip, coordinate: coordinate)
-                }
-                .mapStyle(.standard)
-                .frame(maxWidth: .infinity)
-                .frame(height: 180)
-                .cornerRadius(8)
-            }
-        }
-        .padding(10)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(6)
-    }
-
-    // MARK: - Port Scan
-
-    private var portScanSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Open Ports")
-
-            if viewModel.portScanLoading {
-                ProgressView("Scanning ports…")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding()
-            } else if let error = viewModel.portScanError {
-                errorLabel(error)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    if viewModel.isCloudflareProxied {
-                        Text("Domain is behind Cloudflare's proxy. Results reflect what CF's edge exposes, not the origin. CF only proxies ports: 80, 443, 2052–2053, 2082–2083, 2086–2087, 2095–2096, 8080, 8443, 8880.")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.orange)
-                            .padding(8)
-                            .background(Color.orange.opacity(0.1))
-                            .cornerRadius(6)
-                    }
-                    portScanResultsCard(viewModel.portScanResults)
-
-                    DisclosureGroup("Custom Ports", isExpanded: $customPortsExpanded) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            TextField("8888, 9000, 27017", text: $customPortInput)
-                                .font(.system(.caption, design: .monospaced))
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .keyboardType(.numberPad)
-                                .padding(10)
-                                .background(Color(.systemGray6).opacity(0.5))
-                                .cornerRadius(6)
-
-                            Button("Scan") {
-                                let ports = parsedCustomPorts(from: customPortInput)
-                                Task {
-                                    await viewModel.runCustomPortScan(ports: ports)
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.blue)
-                            .disabled(viewModel.customPortScanLoading)
-
-                            if viewModel.customPortScanLoading {
-                                ProgressView("Scanning custom ports…")
-                                    .font(.system(.caption, design: .monospaced))
-                            } else if let error = viewModel.customPortScanError {
-                                errorLabel(error)
-                            } else if !viewModel.customPortResults.isEmpty {
-                                portScanResultsCard(viewModel.customPortResults)
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
-                    .font(.system(.caption, design: .monospaced))
-                    .tint(.secondary)
-                }
-                .padding(10)
-                .background(Color(.systemGray6).opacity(0.5))
-                .cornerRadius(6)
-            }
-        }
-        .padding(.top, 16)
-    }
-
-    // MARK: - Helpers
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(.headline, design: .default))
-            .foregroundStyle(.white)
-    }
-
-    private var dnssecStatus: Bool? {
-        viewModel.dnsSections.compactMap(\.dnssecSigned).first
-    }
-
-    private func certRow(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-        }
-    }
-
-    private var hstsLoadingRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("HSTS Preload")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
-            ProgressView()
-                .controlSize(.small)
-        }
-    }
-
-    private func hstsStatusRow(_ isPreloaded: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("HSTS Preload")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.secondary)
-            Text(isPreloaded ? "Preloaded" : "Not preloaded")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(isPreloaded ? .green : .secondary)
-        }
-    }
-
-    private func horizontallyScrollableCard<Content: View>(
-        spacing: CGFloat = 4,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        horizontallyScrollableContent(spacing: spacing) {
-            content()
-        }
-        .padding(10)
-        .background(Color(.systemGray6).opacity(0.5))
-        .cornerRadius(6)
-    }
-
-    private func horizontallyScrollableContent<Content: View>(
-        spacing: CGFloat = 4,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        ScrollView(.horizontal) {
-            VStack(alignment: .leading, spacing: spacing) {
-                content()
-            }
-            .scrollTargetLayout()
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func errorLabel(_ message: String) -> some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.red)
-            .padding(8)
-    }
-
-    private func portScanResultsCard(_ results: [PortScanResult]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(results) { result in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(result.open ? Color.green : Color(.systemGray4))
-                            .frame(width: 8, height: 8)
-                        Text("\(result.port)")
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-                            .frame(width: 52, alignment: .leading)
-                        Text(result.service)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(result.open ? .primary : .secondary)
-                        Spacer()
-                        if result.open {
-                            Text("Open")
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.green)
-                        }
-                    }
-
-                    if let banner = result.banner {
-                        Text(banner)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.leading, 16)
-                    }
-                }
-            }
+    private func runCustomPortScan() {
+        let ports = parsedCustomPorts(from: customPortInput)
+        Task {
+            await viewModel.runCustomPortScan(ports: ports)
         }
     }
 
@@ -858,48 +222,6 @@ struct ContentView: View {
         }
 
         return ports
-    }
-
-    private var httpStatusSummaryParts: [(text: String, color: Color)] {
-        var parts: [(text: String, color: Color)] = []
-
-        if let statusCode = viewModel.httpStatusCode {
-            parts.append(("HTTP \(statusCode)", .cyan))
-        }
-        if let responseTimeMs = viewModel.httpResponseTimeMs {
-            parts.append(("\(responseTimeMs)ms", .secondary))
-        }
-        if let httpProtocol = viewModel.httpProtocol {
-            parts.append((httpProtocol, .secondary))
-        }
-
-        return parts
-    }
-
-    private var http3AvailabilityNote: String? {
-        guard viewModel.http3Advertised, viewModel.httpProtocol != "HTTP/3" else {
-            return nil
-        }
-        return "(HTTP/3 available)"
-    }
-
-    private func httpSecurityGradeColor(for grade: String) -> Color {
-        switch grade {
-        case "A", "B":
-            .green
-        case "C":
-            .yellow
-        case "D", "F":
-            .red
-        default:
-            .secondary
-        }
-    }
-
-    private func expiryColor(_ days: Int) -> Color {
-        if days < 30 { return .red }
-        if days < 60 { return .yellow }
-        return .green
     }
 
     private func shareResults() {
@@ -928,12 +250,553 @@ struct ContentView: View {
     }
 }
 
+struct SummaryView: View {
+    let fields: [SummaryFieldViewData]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Summary")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(fields) { field in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(field.label)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text(field.value)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(ResultColors.color(for: field.tone))
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color(.systemGray6).opacity(0.5))
+                    .cornerRadius(6)
+                }
+            }
+        }
+    }
+}
+
+struct DomainSectionView: View {
+    let rows: [InfoRowViewData]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Domain")
+            CardView {
+                ForEach(rows) { row in
+                    LabeledValueRow(row: row)
+                }
+            }
+        }
+    }
+}
+
+struct DNSSectionView: View {
+    let dnssecLabel: String?
+    let sections: [DNSRecordSectionViewData]
+    let ptrMessage: SectionMessageViewData?
+    let loading: Bool
+    let sectionError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
+                SectionTitleView(title: "DNS")
+                Spacer()
+                if let dnssecLabel {
+                    Text(dnssecLabel)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+
+            if loading {
+                LoadingCardView(text: "Querying DNS…")
+            } else if let sectionError, sections.isEmpty {
+                MessageCardView(text: sectionError, isError: true)
+            } else {
+                ForEach(sections) { section in
+                    CardView {
+                        Text(section.title)
+                            .font(.system(.subheadline, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.cyan)
+
+                        if let message = section.message {
+                            MessageRowView(text: message.text, isError: message.isError)
+                        }
+
+                        ForEach(section.rows) { row in
+                            LabeledValueRow(row: row)
+                        }
+
+                        if let wildcardTitle = section.wildcardTitle {
+                            Text(wildcardTitle)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 4)
+                            ForEach(section.wildcardRows) { row in
+                                LabeledValueRow(row: row)
+                            }
+                        }
+                    }
+                }
+
+                if let ptrMessage {
+                    CardView {
+                        Text("PTR")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.cyan)
+                        MessageRowView(text: ptrMessage.text, isError: ptrMessage.isError)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct WebSectionView: View {
+    let certificateRows: [InfoRowViewData]
+    let sslInfo: SSLCertificateInfo?
+    let sslLoading: Bool
+    let sslError: String?
+    let responseRows: [InfoRowViewData]
+    let headers: [HTTPHeader]
+    let headersLoading: Bool
+    let headersError: String?
+    let redirects: [RedirectHopViewData]
+    let redirectLoading: Bool
+    let redirectError: String?
+    let finalURL: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Web")
+
+            CardView {
+                Text("TLS")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+                if sslLoading {
+                    ProgressView("Checking certificate…")
+                } else if let sslError {
+                    MessageRowView(text: sslError, isError: true)
+                } else {
+                    ForEach(certificateRows) { row in
+                        LabeledValueRow(row: row)
+                    }
+                    if let sslInfo, !sslInfo.subjectAltNames.isEmpty {
+                        Text("SANs")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        ForEach(sslInfo.subjectAltNames, id: \.self) { san in
+                            Text(san)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+
+            CardView {
+                Text("Headers")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+                if headersLoading {
+                    ProgressView("Fetching headers…")
+                } else if let headersError {
+                    MessageRowView(text: headersError, isError: true)
+                } else {
+                    ForEach(responseRows) { row in
+                        LabeledValueRow(row: row)
+                    }
+                    if headers.isEmpty {
+                        MessageRowView(text: "No HTTP headers returned", isError: false)
+                    } else {
+                        ForEach(headers) { header in
+                            HStack(alignment: .top, spacing: 4) {
+                                Text(header.name + ":")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(header.isSecurityHeader ? .yellow : .cyan)
+                                Text(header.value)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+            }
+
+            CardView {
+                Text("Redirects")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+                if redirectLoading {
+                    ProgressView("Tracing redirects…")
+                } else if let redirectError {
+                    MessageRowView(text: redirectError, isError: true)
+                } else if redirects.isEmpty {
+                    MessageRowView(text: "No redirect data available", isError: false)
+                } else {
+                    if let finalURL {
+                        LabeledValueRow(row: InfoRowViewData(label: "Final URL", value: finalURL, tone: .secondary))
+                    }
+                    ForEach(redirects) { redirect in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text(redirect.stepLabel)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16, alignment: .trailing)
+                            Text(redirect.statusCode)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.cyan)
+                                .frame(width: 36, alignment: .leading)
+                            Text(redirect.url)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            if redirect.isFinal {
+                                Text("(final)")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct EmailSectionView: View {
+    let rows: [EmailRowViewData]
+    let loading: Bool
+    let error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Email")
+            CardView {
+                if loading {
+                    ProgressView("Checking email records…")
+                } else if let error {
+                    MessageRowView(text: error, isError: true)
+                } else if rows.isEmpty {
+                    MessageRowView(text: "No email security records found", isError: false)
+                } else {
+                    ForEach(rows) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(row.label)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.cyan)
+                                    .frame(width: 76, alignment: .leading)
+                                Text(row.status)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(ResultColors.color(for: row.statusTone))
+                            }
+                            Text(row.detail)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                            if let auxiliaryDetail = row.auxiliaryDetail {
+                                Text(auxiliaryDetail)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct NetworkSectionView: View {
+    let reachabilityRows: [ReachabilityRowViewData]
+    let reachabilityLoading: Bool
+    let reachabilityError: String?
+    let locationRows: [InfoRowViewData]
+    let geolocation: IPGeolocation?
+    let geolocationLoading: Bool
+    let geolocationError: String?
+    let standardPortRows: [PortScanRowViewData]
+    let customPortRows: [PortScanRowViewData]
+    let portScanLoading: Bool
+    let portScanError: String?
+    let customPortScanLoading: Bool
+    let customPortScanError: String?
+    let isCloudflareProxied: Bool
+    @Binding var customPortsExpanded: Bool
+    @Binding var customPortInput: String
+    let onScanCustomPorts: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Network")
+
+            CardView {
+                Text("Reachability")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+                if reachabilityLoading {
+                    ProgressView("Checking ports…")
+                } else if let reachabilityError {
+                    MessageRowView(text: reachabilityError, isError: true)
+                } else {
+                    ForEach(reachabilityRows) { row in
+                        HStack {
+                            Text(row.portLabel)
+                                .font(.system(.caption, design: .monospaced))
+                            Spacer()
+                            Text(row.latencyLabel)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(row.statusLabel)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(ResultColors.color(for: row.statusTone))
+                        }
+                    }
+                }
+            }
+
+            CardView {
+                Text("Location")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+                if geolocationLoading {
+                    ProgressView("Looking up location…")
+                } else if let geolocationError, geolocation == nil {
+                    MessageRowView(text: geolocationError, isError: geolocationError != "No A record available")
+                } else if let geolocation {
+                    ForEach(locationRows) { row in
+                        LabeledValueRow(row: row)
+                    }
+                    if let latitude = geolocation.latitude, let longitude = geolocation.longitude {
+                        let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+                        Map(initialPosition: .region(MKCoordinateRegion(
+                            center: coordinate,
+                            span: MKCoordinateSpan(latitudeDelta: 1, longitudeDelta: 1)
+                        ))) {
+                            Marker(geolocation.ip, coordinate: coordinate)
+                        }
+                        .mapStyle(.standard)
+                        .frame(height: 180)
+                        .cornerRadius(8)
+                    }
+                } else {
+                    MessageRowView(text: "No location data available", isError: false)
+                }
+            }
+
+            CardView {
+                Text("Port Scan")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.cyan)
+
+                if isCloudflareProxied {
+                    Text("Domain is behind Cloudflare's proxy. Results reflect the edge, not the origin.")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.orange)
+                }
+
+                if portScanLoading {
+                    ProgressView("Scanning ports…")
+                } else if let portScanError, standardPortRows.isEmpty {
+                    MessageRowView(text: portScanError, isError: true)
+                } else {
+                    Text("Standard Ports")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    PortRowsView(rows: standardPortRows)
+                }
+
+                DisclosureGroup("Custom Ports", isExpanded: $customPortsExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("8888, 9000, 27017", text: $customPortInput)
+                            .font(.system(.caption, design: .monospaced))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.numberPad)
+                            .padding(10)
+                            .background(Color(.systemGray6).opacity(0.5))
+                            .cornerRadius(6)
+
+                        Button("Scan") {
+                            onScanCustomPorts()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(customPortScanLoading)
+
+                        if customPortScanLoading {
+                            ProgressView("Scanning custom ports…")
+                        } else if let customPortScanError {
+                            MessageRowView(text: customPortScanError, isError: true)
+                        } else {
+                            PortRowsView(rows: customPortRows)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.system(.caption, design: .monospaced))
+                .tint(.secondary)
+            }
+        }
+    }
+}
+
+struct PortRowsView: View {
+    let rows: [PortScanRowViewData]
+
+    var body: some View {
+        if rows.isEmpty {
+            MessageRowView(text: "No results", isError: false)
+        } else {
+            ForEach(rows) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(row.portLabel)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(width: 52, alignment: .leading)
+                        Text(row.service)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if let durationLabel = row.durationLabel {
+                            Text(durationLabel)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(row.statusLabel)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(ResultColors.color(for: row.statusTone))
+                    }
+                    if let banner = row.banner {
+                        Text(banner)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 8)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct SectionTitleView: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(.headline))
+            .foregroundStyle(.white)
+    }
+}
+
+struct CardView<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: 6) {
+                content
+            }
+            .scrollTargetLayout()
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.systemGray6).opacity(0.5))
+        .cornerRadius(6)
+    }
+}
+
+struct LoadingCardView: View {
+    let text: String
+
+    var body: some View {
+        CardView {
+            ProgressView(text)
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+}
+
+struct MessageCardView: View {
+    let text: String
+    let isError: Bool
+
+    var body: some View {
+        CardView {
+            MessageRowView(text: text, isError: isError)
+        }
+    }
+}
+
+struct MessageRowView: View {
+    let text: String
+    let isError: Bool
+
+    var body: some View {
+        Label(text, systemImage: isError ? "exclamationmark.triangle.fill" : "info.circle")
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(isError ? .red : .secondary)
+    }
+}
+
+struct LabeledValueRow: View {
+    let row: InfoRowViewData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(row.label)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text(row.value)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(ResultColors.color(for: row.tone))
+                .textSelection(.enabled)
+        }
+    }
+}
+
+enum ResultColors {
+    static func color(for tone: ResultTone) -> Color {
+        switch tone {
+        case .primary:
+            return .primary
+        case .secondary:
+            return .secondary
+        case .success:
+            return .green
+        case .warning:
+            return .yellow
+        case .failure:
+            return .red
+        }
+    }
+}
+
 extension DateFormatter {
     static let certDate: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
     }()
 }
 
@@ -948,10 +811,7 @@ private struct SettingsView: View {
         guard resolverOption == .custom else {
             return nil
         }
-
-        return DNSResolverOption.isValidCustomURL(customResolverURL)
-            ? nil
-            : "Resolver URL must start with https://"
+        return DNSResolverOption.isValidCustomURL(customResolverURL) ? nil : "Resolver URL must start with https://"
     }
 
     var body: some View {
@@ -981,9 +841,7 @@ private struct SettingsView: View {
         .onAppear {
             let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
             resolverOption = DNSResolverOption.option(for: currentResolverURL)
-            customResolverURL = resolverOption == .custom
-                ? currentResolverURL
-                : DNSResolverOption.defaultURLString
+            customResolverURL = resolverOption == .custom ? currentResolverURL : DNSResolverOption.defaultURLString
         }
         .onChange(of: resolverOption) { _, newValue in
             guard let presetURL = newValue.urlString else {
@@ -993,9 +851,7 @@ private struct SettingsView: View {
             storedResolverURL = presetURL
         }
         .onChange(of: customResolverURL) { _, newValue in
-            guard resolverOption == .custom else {
-                return
-            }
+            guard resolverOption == .custom else { return }
             storedResolverURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }

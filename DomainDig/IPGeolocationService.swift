@@ -1,17 +1,22 @@
 import Foundation
 
 struct IPGeolocationService {
-    static func lookup(ip: String) async throws -> IPGeolocation {
+    static func lookup(ip: String) async -> ServiceResult<IPGeolocation> {
         let url = URL(string: "https://ipapi.co/\(ip)/json/")!
         let request = URLRequest(url: url, timeoutInterval: 10)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw URLError(.badServerResponse)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return .error(URLError(.badServerResponse).localizedDescription)
+            }
+
+            let geolocation = try JSONDecoder().decode(IPGeolocation.self, from: data)
+            return .success(geolocation)
+        } catch {
+            return .error(error.localizedDescription)
         }
-
-        return try JSONDecoder().decode(IPGeolocation.self, from: data)
     }
 }

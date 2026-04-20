@@ -3,7 +3,7 @@ import Security
 
 struct SSLCheckService {
 
-    static func check(domain: String) async throws -> SSLCertificateInfo {
+    static func check(domain: String) async -> ServiceResult<SSLCertificateInfo> {
         let delegate = SSLSessionDelegate()
         let session = URLSession(
             configuration: .ephemeral,
@@ -15,14 +15,17 @@ struct SSLCheckService {
         let url = URL(string: "https://\(domain)")!
         let request = URLRequest(url: url, timeoutInterval: 10)
 
-        // We only need to establish the connection to grab the cert
-        _ = try await session.data(for: request)
+        do {
+            _ = try await session.data(for: request)
 
-        guard let trust = delegate.serverTrust else {
-            throw SSLError.noCertificate
+            guard let trust = delegate.serverTrust else {
+                return .empty(SSLError.noCertificate.localizedDescription)
+            }
+
+            return .success(try extractCertificateInfo(from: trust, metadata: delegate.tlsMetadata))
+        } catch {
+            return .error(error.localizedDescription)
         }
-
-        return try extractCertificateInfo(from: trust, metadata: delegate.tlsMetadata)
     }
 
     static func checkHSTSPreload(domain: String) async -> Bool? {

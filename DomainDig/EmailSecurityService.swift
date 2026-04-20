@@ -8,7 +8,7 @@ struct EmailSecurityService {
 
     /// Analyze email security records. SPF is parsed from existing TXT records;
     /// DMARC and DKIM require additional DoH queries.
-    static func analyze(domain: String, txtRecords: [DNSRecord]) async -> EmailSecurityResult {
+    static func analyze(domain: String, txtRecords: [DNSRecord]) async -> ServiceResult<EmailSecurityResult> {
         // SPF: prefer the already-fetched apex TXT records, but fall back to a direct lookup
         // in case the earlier DNS section missed or normalized the record differently.
         let localSPFRecord = txtRecords.first(where: { isMatchingTXTRecord($0.value, prefix: "v=spf1") })?.value
@@ -49,13 +49,16 @@ struct EmailSecurityService {
             value: bimiValue
         )
 
-        return EmailSecurityResult(
+        let result = EmailSecurityResult(
             spf: spf,
             dmarc: dmarc,
             dkim: dkim,
             bimi: bimi,
             mtaSts: mtaSts
         )
+
+        let hasAnyRecord = result.spf.found || result.dmarc.found || result.dkim.found || result.bimi.found || result.mtaSts?.txtFound == true
+        return hasAnyRecord ? .success(result) : .empty("No email security records found")
     }
 
     /// Query a TXT record for the given subdomain via DoH.
