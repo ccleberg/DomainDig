@@ -6,6 +6,48 @@ enum ServiceResult<Value> {
     case error(String)
 }
 
+enum DomainAvailabilityStatus: String, Codable {
+    case available
+    case registered
+    case unknown
+}
+
+struct DomainAvailabilityResult: Codable {
+    let domain: String
+    let status: DomainAvailabilityStatus
+}
+
+struct DomainSuggestionResult: Identifiable, Codable {
+    let id: UUID
+    let domain: String
+    let status: DomainAvailabilityStatus
+
+    init(id: UUID = UUID(), domain: String, status: DomainAvailabilityStatus) {
+        self.id = id
+        self.domain = domain
+        self.status = status
+    }
+}
+
+struct WatchedDomain: Codable, Identifiable {
+    let id: UUID
+    let domain: String
+    let createdAt: Date
+    var lastKnownAvailability: DomainAvailabilityStatus?
+
+    init(
+        id: UUID = UUID(),
+        domain: String,
+        createdAt: Date = Date(),
+        lastKnownAvailability: DomainAvailabilityStatus? = nil
+    ) {
+        self.id = id
+        self.domain = domain
+        self.createdAt = createdAt
+        self.lastKnownAvailability = lastKnownAvailability
+    }
+}
+
 // MARK: - DNS Models
 
 enum DNSRecordType: String, CaseIterable, Codable {
@@ -290,6 +332,8 @@ struct HistoryEntry: Identifiable, Codable {
     var redirectChain: [RedirectHop]
     var portScanResults: [PortScanResult]
     var hstsPreloaded: Bool?
+    var availabilityResult: DomainAvailabilityResult?
+    var suggestions: [DomainSuggestionResult]
     var resolverDisplayName: String
     var resolverURLString: String
     var totalLookupDurationMs: Int?
@@ -307,7 +351,8 @@ struct HistoryEntry: Identifiable, Codable {
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
          emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ptrRecord: String? = nil,
          redirectChain: [RedirectHop] = [], portScanResults: [PortScanResult] = [],
-         hstsPreloaded: Bool? = nil, resolverDisplayName: String, resolverURLString: String,
+         hstsPreloaded: Bool? = nil, availabilityResult: DomainAvailabilityResult? = nil,
+         suggestions: [DomainSuggestionResult] = [], resolverDisplayName: String, resolverURLString: String,
          totalLookupDurationMs: Int? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
          reachabilityError: String? = nil, ipGeolocationError: String? = nil,
          emailSecurityError: String? = nil, ptrError: String? = nil,
@@ -325,6 +370,8 @@ struct HistoryEntry: Identifiable, Codable {
         self.redirectChain = redirectChain
         self.portScanResults = portScanResults
         self.hstsPreloaded = hstsPreloaded
+        self.availabilityResult = availabilityResult
+        self.suggestions = suggestions
         self.resolverDisplayName = resolverDisplayName
         self.resolverURLString = resolverURLString
         self.totalLookupDurationMs = totalLookupDurationMs
@@ -354,6 +401,8 @@ struct HistoryEntry: Identifiable, Codable {
         redirectChain = try container.decodeIfPresent([RedirectHop].self, forKey: .redirectChain) ?? []
         portScanResults = try container.decodeIfPresent([PortScanResult].self, forKey: .portScanResults) ?? []
         hstsPreloaded = try container.decodeIfPresent(Bool.self, forKey: .hstsPreloaded)
+        availabilityResult = try container.decodeIfPresent(DomainAvailabilityResult.self, forKey: .availabilityResult)
+        suggestions = try container.decodeIfPresent([DomainSuggestionResult].self, forKey: .suggestions) ?? []
         resolverDisplayName = try container.decodeIfPresent(String.self, forKey: .resolverDisplayName) ?? "Cloudflare"
         resolverURLString = try container.decodeIfPresent(String.self, forKey: .resolverURLString) ?? DNSResolverOption.defaultURLString
         totalLookupDurationMs = try container.decodeIfPresent(Int.self, forKey: .totalLookupDurationMs)

@@ -78,7 +78,17 @@ struct HistoryDetailView: View {
                 snapshotBanner
                 SummaryView(fields: DomainViewModel.summaryFields(from: snapshot))
                     .padding(.top, 8)
-                DomainSectionView(rows: DomainViewModel.domainRows(from: snapshot))
+                DomainSectionView(
+                    rows: DomainViewModel.domainRows(from: snapshot),
+                    suggestions: DomainViewModel.suggestionRows(from: snapshot),
+                    showSuggestions: entry.availabilityResult?.status == .registered && !entry.suggestions.isEmpty,
+                    availabilityLoading: false,
+                    suggestionsLoading: false,
+                    isWatched: viewModel.watchedDomains.contains(where: { $0.domain.lowercased() == entry.domain.lowercased() }),
+                    onToggleWatch: {
+                        viewModel.toggleWatchedDomain(domain: entry.domain, availabilityStatus: entry.availabilityResult?.status)
+                    }
+                )
                     .padding(.top, 16)
                 DNSSectionView(
                     dnssecLabel: DomainViewModel.dnssecLabel(from: snapshot),

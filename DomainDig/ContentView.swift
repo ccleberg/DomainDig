@@ -16,7 +16,15 @@ struct ContentView: View {
                         actionButtons
                         SummaryView(fields: viewModel.summaryFields)
                             .padding(.top, 8)
-                        DomainSectionView(rows: viewModel.domainRows)
+                        DomainSectionView(
+                            rows: viewModel.domainRows,
+                            suggestions: viewModel.suggestionRows,
+                            showSuggestions: viewModel.availabilityResult?.status == .registered || viewModel.suggestionsLoading,
+                            availabilityLoading: viewModel.availabilityLoading,
+                            suggestionsLoading: viewModel.suggestionsLoading,
+                            isWatched: viewModel.isCurrentDomainWatched,
+                            onToggleWatch: { viewModel.toggleWatchedDomain() }
+                        )
                             .padding(.top, 16)
                         DNSSectionView(
                             dnssecLabel: viewModel.dnssecLabel,
@@ -98,6 +106,12 @@ struct ContentView: View {
                         HistoryView(viewModel: viewModel)
                     } label: {
                         Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                            .foregroundStyle(.secondary)
+                    }
+                    NavigationLink {
+                        WatchlistView(viewModel: viewModel)
+                    } label: {
+                        Image(systemName: "eye")
                             .foregroundStyle(.secondary)
                     }
                     NavigationLink {
@@ -280,13 +294,57 @@ struct SummaryView: View {
 
 struct DomainSectionView: View {
     let rows: [InfoRowViewData]
+    let suggestions: [DomainSuggestionViewData]
+    let showSuggestions: Bool
+    let availabilityLoading: Bool
+    let suggestionsLoading: Bool
+    let isWatched: Bool
+    let onToggleWatch: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionTitleView(title: "Domain")
+            HStack {
+                SectionTitleView(title: "Domain")
+                Spacer()
+                Button(isWatched ? "Watching" : "Watch") {
+                    onToggleWatch()
+                }
+                .buttonStyle(.bordered)
+                .font(.system(.caption, design: .monospaced))
+            }
             CardView {
                 ForEach(rows) { row in
                     LabeledValueRow(row: row)
+                }
+                if availabilityLoading {
+                    ProgressView("Checking availability…")
+                        .appLoadingStyle()
+                        .padding(.top, 4)
+                }
+                if showSuggestions {
+                    Text("Suggestions")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                    if suggestionsLoading {
+                        ProgressView("Checking alternatives…")
+                            .appLoadingStyle()
+                    } else if suggestions.isEmpty {
+                        MessageRowView(text: "No suggestions", isError: false)
+                    } else {
+                        ForEach(suggestions) { suggestion in
+                            HStack {
+                                Text(suggestion.domain)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                    .textSelection(.enabled)
+                                Spacer()
+                                Text(suggestion.status)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(ResultColors.color(for: suggestion.tone))
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -384,6 +442,7 @@ struct WebSectionView: View {
                     .foregroundStyle(.cyan)
                 if sslLoading {
                     ProgressView("Checking certificate…")
+                        .appLoadingStyle()
                 } else if let sslError {
                     MessageRowView(text: sslError, isError: true)
                 } else {
@@ -410,6 +469,7 @@ struct WebSectionView: View {
                     .foregroundStyle(.cyan)
                 if headersLoading {
                     ProgressView("Fetching headers…")
+                        .appLoadingStyle()
                 } else if let headersError {
                     MessageRowView(text: headersError, isError: true)
                 } else {
@@ -441,6 +501,7 @@ struct WebSectionView: View {
                     .foregroundStyle(.cyan)
                 if redirectLoading {
                     ProgressView("Tracing redirects…")
+                        .appLoadingStyle()
                 } else if let redirectError {
                     MessageRowView(text: redirectError, isError: true)
                 } else if redirects.isEmpty {
@@ -486,6 +547,7 @@ struct EmailSectionView: View {
             CardView {
                 if loading {
                     ProgressView("Checking email records…")
+                        .appLoadingStyle()
                 } else if let error {
                     MessageRowView(text: error, isError: true)
                 } else if rows.isEmpty {
@@ -549,6 +611,7 @@ struct NetworkSectionView: View {
                     .foregroundStyle(.cyan)
                 if reachabilityLoading {
                     ProgressView("Checking ports…")
+                        .appLoadingStyle()
                 } else if let reachabilityError {
                     MessageRowView(text: reachabilityError, isError: true)
                 } else {
@@ -568,13 +631,14 @@ struct NetworkSectionView: View {
                 }
             }
 
-            CardView {
+            CardView(allowsHorizontalScroll: false) {
                 Text("Location")
                     .font(.system(.subheadline, design: .monospaced))
                     .fontWeight(.semibold)
                     .foregroundStyle(.cyan)
                 if geolocationLoading {
                     ProgressView("Looking up location…")
+                        .appLoadingStyle()
                 } else if let geolocationError, geolocation == nil {
                     MessageRowView(text: geolocationError, isError: geolocationError != "No A record available")
                 } else if let geolocation {
@@ -590,6 +654,7 @@ struct NetworkSectionView: View {
                             Marker(geolocation.ip, coordinate: coordinate)
                         }
                         .mapStyle(.standard)
+                        .frame(maxWidth: .infinity)
                         .frame(height: 180)
                         .cornerRadius(8)
                     }
@@ -598,7 +663,7 @@ struct NetworkSectionView: View {
                 }
             }
 
-            CardView {
+            CardView(allowsHorizontalScroll: false) {
                 Text("Port Scan")
                     .font(.system(.subheadline, design: .monospaced))
                     .fontWeight(.semibold)
@@ -608,10 +673,12 @@ struct NetworkSectionView: View {
                     Text("Domain is behind Cloudflare's proxy. Results reflect the edge, not the origin.")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if portScanLoading {
                     ProgressView("Scanning ports…")
+                        .appLoadingStyle()
                 } else if let portScanError, standardPortRows.isEmpty {
                     MessageRowView(text: portScanError, isError: true)
                 } else {
@@ -640,6 +707,7 @@ struct NetworkSectionView: View {
 
                         if customPortScanLoading {
                             ProgressView("Scanning custom ports…")
+                                .appLoadingStyle()
                         } else if let customPortScanError {
                             MessageRowView(text: customPortScanError, isError: true)
                         } else {
@@ -704,24 +772,37 @@ struct SectionTitleView: View {
 }
 
 struct CardView<Content: View>: View {
+    let allowsHorizontalScroll: Bool
     let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(allowsHorizontalScroll: Bool = true, @ViewBuilder content: () -> Content) {
+        self.allowsHorizontalScroll = allowsHorizontalScroll
         self.content = content()
     }
 
     var body: some View {
-        ScrollView(.horizontal) {
-            VStack(alignment: .leading, spacing: 6) {
-                content
+        Group {
+            if allowsHorizontalScroll {
+                ScrollView(.horizontal) {
+                    cardContent
+                        .scrollTargetLayout()
+                }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            } else {
+                cardContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .scrollTargetLayout()
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.systemGray6).opacity(0.5))
         .cornerRadius(6)
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            content
+        }
     }
 }
 
@@ -731,6 +812,7 @@ struct LoadingCardView: View {
     var body: some View {
         CardView {
             ProgressView(text)
+                .appLoadingStyle()
                 .frame(maxWidth: .infinity, alignment: .center)
         }
     }
@@ -798,6 +880,12 @@ extension DateFormatter {
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private extension View {
+    func appLoadingStyle() -> some View {
+        font(.system(.caption, design: .monospaced))
+    }
 }
 
 private struct SettingsView: View {

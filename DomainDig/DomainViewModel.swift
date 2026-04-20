@@ -72,6 +72,13 @@ struct PortScanRowViewData: Identifiable {
     let durationLabel: String?
 }
 
+struct DomainSuggestionViewData: Identifiable {
+    let id: UUID
+    let domain: String
+    let status: String
+    let tone: ResultTone
+}
+
 struct LookupSnapshot {
     let domain: String
     let timestamp: Date
@@ -80,6 +87,8 @@ struct LookupSnapshot {
     let totalLookupDurationMs: Int?
     let dnsSections: [DNSSection]
     let dnsError: String?
+    let availabilityResult: DomainAvailabilityResult?
+    let suggestions: [DomainSuggestionResult]
     let sslInfo: SSLCertificateInfo?
     let sslError: String?
     let hstsPreloaded: Bool?
@@ -115,6 +124,8 @@ extension HistoryEntry {
             totalLookupDurationMs: totalLookupDurationMs,
             dnsSections: dnsSections,
             dnsError: nil,
+            availabilityResult: availabilityResult,
+            suggestions: suggestions,
             sslInfo: sslInfo,
             sslError: sslError,
             hstsPreloaded: hstsPreloaded,
@@ -150,6 +161,10 @@ final class DomainViewModel {
     var dnsSections: [DNSSection] = []
     var dnsLoading = false
     var dnsError: String?
+    var availabilityResult: DomainAvailabilityResult?
+    var availabilityLoading = false
+    var suggestions: [DomainSuggestionResult] = []
+    var suggestionsLoading = false
 
     var sslInfo: SSLCertificateInfo?
     var sslLoading = false
@@ -209,6 +224,15 @@ final class DomainViewModel {
     private static let savedDomainsKey = "savedDomains"
     var savedDomains: [String] = UserDefaults.standard.stringArray(forKey: savedDomainsKey) ?? []
 
+    private static let watchedDomainsKey = "watchedDomains"
+    var watchedDomains: [WatchedDomain] = {
+        guard let data = UserDefaults.standard.data(forKey: watchedDomainsKey),
+              let domains = try? JSONDecoder().decode([WatchedDomain].self, from: data) else {
+            return []
+        }
+        return domains
+    }()
+
     private static let historyKey = "lookupHistory"
     private static let maxHistory = 50
     var history: [HistoryEntry] = {
@@ -230,6 +254,8 @@ final class DomainViewModel {
     var resultsLoaded: Bool {
         hasRun &&
             !dnsLoading &&
+            !availabilityLoading &&
+            !suggestionsLoading &&
             !sslLoading &&
             !hstsLoading &&
             !httpHeadersLoading &&
@@ -248,6 +274,10 @@ final class DomainViewModel {
 
     var isCurrentDomainSaved: Bool {
         !searchedDomain.isEmpty && savedDomains.contains(where: { $0.lowercased() == searchedDomain.lowercased() })
+    }
+
+    var isCurrentDomainWatched: Bool {
+        !searchedDomain.isEmpty && watchedDomains.contains(where: { $0.domain.lowercased() == searchedDomain.lowercased() })
     }
 
     var resolverDisplayName: String {
@@ -276,6 +306,8 @@ final class DomainViewModel {
             totalLookupDurationMs: lastLookupDurationMs,
             dnsSections: dnsSections,
             dnsError: dnsError,
+            availabilityResult: availabilityResult,
+            suggestions: suggestions,
             sslInfo: sslInfo,
             sslError: sslError,
             hstsPreloaded: hstsPreloaded,
@@ -312,6 +344,10 @@ final class DomainViewModel {
 
     var dnsRows: [DNSRecordSectionViewData] {
         Self.dnsRows(from: currentSnapshot)
+    }
+
+    var suggestionRows: [DomainSuggestionViewData] {
+        Self.suggestionRows(from: currentSnapshot)
     }
 
     var dnssecLabel: String? {
@@ -370,6 +406,33 @@ final class DomainViewModel {
     func removeSavedDomains(at offsets: IndexSet) {
         savedDomains.remove(atOffsets: offsets)
         UserDefaults.standard.set(savedDomains, forKey: Self.savedDomainsKey)
+    }
+
+    func toggleWatchedDomain() {
+        guard !searchedDomain.isEmpty else { return }
+        toggleWatchedDomain(domain: searchedDomain, availabilityStatus: availabilityResult?.status)
+    }
+
+    func toggleWatchedDomain(domain: String, availabilityStatus: DomainAvailabilityStatus?) {
+        guard !domain.isEmpty else { return }
+
+        if watchedDomains.contains(where: { $0.domain.lowercased() == domain.lowercased() }) {
+            watchedDomains.removeAll { $0.domain.lowercased() == domain.lowercased() }
+        } else {
+            watchedDomains.insert(
+                WatchedDomain(
+                    domain: domain,
+                    lastKnownAvailability: availabilityStatus
+                ),
+                at: 0
+            )
+        }
+        persistWatchedDomains()
+    }
+
+    func removeWatchedDomains(at offsets: IndexSet) {
+        watchedDomains.remove(atOffsets: offsets)
+        persistWatchedDomains()
     }
 
     func removeHistoryEntries(at offsets: IndexSet) {
@@ -456,6 +519,7 @@ final class DomainViewModel {
     private func performLookup(domain: String, lookupID: UUID) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.runDNS(domain: domain, lookupID: lookupID) }
+            group.addTask { await self.runAvailability(domain: domain, lookupID: lookupID) }
             group.addTask { await self.runSSL(domain: domain, lookupID: lookupID) }
             group.addTask { await self.runHSTSPreload(domain: domain, lookupID: lookupID) }
             group.addTask { await self.runHTTPHeaders(domain: domain, lookupID: lookupID) }
@@ -480,6 +544,15 @@ final class DomainViewModel {
         }
 
         guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
+
+        if availabilityResult?.status == .registered {
+            await runSuggestions(domain: domain, lookupID: lookupID)
+        } else {
+            suggestions = []
+            suggestionsLoading = false
+        }
+
+        guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
         lastLookupDurationMs = lookupStartedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
         saveHistoryEntry(replaceLatest: false)
     }
@@ -499,6 +572,14 @@ final class DomainViewModel {
             dnsError = message
         }
         dnsLoading = false
+    }
+
+    private func runAvailability(domain: String, lookupID: UUID) async {
+        let result = await DomainAvailabilityService.check(domain: domain)
+        guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
+        availabilityResult = result
+        availabilityLoading = false
+        updateWatchedDomainAvailability(for: result.domain, status: result.status)
     }
 
     private func runSSL(domain: String, lookupID: UUID) async {
@@ -670,6 +751,13 @@ final class DomainViewModel {
         ipGeolocationError = "No A record available"
     }
 
+    private func runSuggestions(domain: String, lookupID: UUID) async {
+        let results = await DomainAvailabilityService.suggestions(for: domain)
+        guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
+        suggestions = results
+        suggestionsLoading = false
+    }
+
     private func applyCustomPortResult(_ result: ServiceResult<[PortScanResult]>) {
         switch result {
         case let .success(results):
@@ -727,6 +815,8 @@ final class DomainViewModel {
             redirectChain: redirectChain,
             portScanResults: allPortScanResults,
             hstsPreloaded: hstsPreloaded,
+            availabilityResult: availabilityResult,
+            suggestions: suggestions,
             resolverDisplayName: resolverDisplayName,
             resolverURLString: resolverURLString,
             totalLookupDurationMs: lastLookupDurationMs,
@@ -757,6 +847,20 @@ final class DomainViewModel {
         }
     }
 
+    private func persistWatchedDomains() {
+        if let data = try? JSONEncoder().encode(watchedDomains) {
+            UserDefaults.standard.set(data, forKey: Self.watchedDomainsKey)
+        }
+    }
+
+    private func updateWatchedDomainAvailability(for domain: String, status: DomainAvailabilityStatus) {
+        guard let index = watchedDomains.firstIndex(where: { $0.domain.lowercased() == domain.lowercased() }) else {
+            return
+        }
+        watchedDomains[index].lastKnownAvailability = status
+        persistWatchedDomains()
+    }
+
     private func addRecentSearch(_ domain: String) {
         recentSearches.removeAll { $0.lowercased() == domain.lowercased() }
         recentSearches.insert(domain, at: 0)
@@ -770,6 +874,10 @@ final class DomainViewModel {
         dnsSections = []
         dnsError = nil
         dnsLoading = false
+        availabilityResult = nil
+        availabilityLoading = false
+        suggestions = []
+        suggestionsLoading = false
         sslInfo = nil
         sslError = nil
         sslLoading = false
@@ -808,6 +916,8 @@ final class DomainViewModel {
 
     private func setAllLoadingStates(_ loading: Bool) {
         dnsLoading = loading
+        availabilityLoading = loading
+        suggestionsLoading = loading
         sslLoading = loading
         hstsLoading = loading
         httpHeadersLoading = loading
@@ -838,12 +948,32 @@ final class DomainViewModel {
     }
 
     static func domainRows(from snapshot: LookupSnapshot) -> [InfoRowViewData] {
-        [
+        var rows = [
             InfoRowViewData(label: "Domain", value: snapshot.domain, tone: .primary),
             InfoRowViewData(label: "Resolver", value: snapshot.resolverDisplayName, tone: .secondary),
             InfoRowViewData(label: snapshot.isLive ? "Result" : "Snapshot", value: snapshot.isLive ? "Live" : "Snapshot", tone: snapshot.isLive ? .success : .warning),
             InfoRowViewData(label: "Lookup Duration", value: durationLabel(snapshot.totalLookupDurationMs), tone: .secondary)
         ]
+        rows.insert(
+            InfoRowViewData(
+                label: "Availability",
+                value: availabilityLabel(snapshot.availabilityResult?.status),
+                tone: availabilityTone(snapshot.availabilityResult?.status)
+            ),
+            at: 1
+        )
+        return rows
+    }
+
+    static func suggestionRows(from snapshot: LookupSnapshot) -> [DomainSuggestionViewData] {
+        snapshot.suggestions.map {
+            DomainSuggestionViewData(
+                id: $0.id,
+                domain: $0.domain,
+                status: availabilityLabel($0.status),
+                tone: availabilityTone($0.status)
+            )
+        }
     }
 
     static func dnsRows(from snapshot: LookupSnapshot) -> [DNSRecordSectionViewData] {
@@ -879,8 +1009,8 @@ final class DomainViewModel {
         var rows = [
             InfoRowViewData(label: "Common Name", value: sslInfo.commonName, tone: .primary),
             InfoRowViewData(label: "Issuer", value: sslInfo.issuer, tone: .primary),
-            InfoRowViewData(label: "Valid From", value: DateFormatter.certDate.string(from: sslInfo.validFrom), tone: .secondary),
-            InfoRowViewData(label: "Valid Until", value: DateFormatter.certDate.string(from: sslInfo.validUntil), tone: .secondary),
+            InfoRowViewData(label: "Valid From", value: certificateDateFormatter.string(from: sslInfo.validFrom), tone: .secondary),
+            InfoRowViewData(label: "Valid Until", value: certificateDateFormatter.string(from: sslInfo.validUntil), tone: .secondary),
             InfoRowViewData(label: "Days Until Expiry", value: "\(sslInfo.daysUntilExpiry)", tone: sslInfo.daysUntilExpiry < 30 ? .failure : (sslInfo.daysUntilExpiry < 60 ? .warning : .success)),
             InfoRowViewData(label: "Chain Depth", value: "\(sslInfo.chainDepth)", tone: .secondary)
         ]
@@ -1009,6 +1139,14 @@ final class DomainViewModel {
         appendSection("Domain") {
             for row in domainRows(from: snapshot) {
                 lines.append("  \(row.label): \(row.value)")
+            }
+            if snapshot.suggestions.isEmpty {
+                lines.append("  Suggestions: None")
+            } else {
+                lines.append("  Suggestions:")
+                for suggestion in snapshot.suggestions {
+                    lines.append("    \(suggestion.domain): \(availabilityLabel(suggestion.status))")
+                }
             }
         }
 
@@ -1183,6 +1321,28 @@ final class DomainViewModel {
         return "SPF \(emailSecurity.spf.found ? "Yes" : "No") / DMARC \(emailSecurity.dmarc.found ? "Yes" : "No")"
     }
 
+    private static func availabilityLabel(_ status: DomainAvailabilityStatus?) -> String {
+        switch status {
+        case .available:
+            return "Available"
+        case .registered:
+            return "Registered"
+        case .unknown, .none:
+            return "Unknown"
+        }
+    }
+
+    private static func availabilityTone(_ status: DomainAvailabilityStatus?) -> ResultTone {
+        switch status {
+        case .available:
+            return .success
+        case .registered:
+            return .warning
+        case .unknown, .none:
+            return .secondary
+        }
+    }
+
     private static func securityGradeTone(_ grade: String) -> ResultTone {
         switch grade {
         case "A", "B":
@@ -1199,6 +1359,13 @@ final class DomainViewModel {
     private static func durationLabel(_ durationMs: Int?) -> String {
         durationMs.map { "\($0) ms" } ?? "Unavailable"
     }
+
+    private static let certificateDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 private extension String {
