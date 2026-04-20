@@ -48,6 +48,54 @@ struct WatchedDomain: Codable, Identifiable {
     }
 }
 
+struct DomainChangeSummary: Codable, Equatable {
+    let hasChanges: Bool
+    let changedSections: [String]
+    let generatedAt: Date
+}
+
+enum PremiumCapability: String, Codable {
+    case unlimitedTrackedDomains
+    case automatedMonitoring
+    case pushAlerts
+    case batchTracking
+    case advancedExports
+}
+
+struct TrackedDomain: Codable, Identifiable, Equatable {
+    let id: UUID
+    var domain: String
+    var createdAt: Date
+    var updatedAt: Date
+    var note: String?
+    var isPinned: Bool
+    var lastKnownAvailability: DomainAvailabilityStatus?
+    var lastSnapshotID: UUID?
+    var lastChangeSummary: DomainChangeSummary?
+
+    init(
+        id: UUID = UUID(),
+        domain: String,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        note: String? = nil,
+        isPinned: Bool = false,
+        lastKnownAvailability: DomainAvailabilityStatus? = nil,
+        lastSnapshotID: UUID? = nil,
+        lastChangeSummary: DomainChangeSummary? = nil
+    ) {
+        self.id = id
+        self.domain = domain
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.note = note
+        self.isPinned = isPinned
+        self.lastKnownAvailability = lastKnownAvailability
+        self.lastSnapshotID = lastSnapshotID
+        self.lastChangeSummary = lastChangeSummary
+    }
+}
+
 // MARK: - DNS Models
 
 enum DNSRecordType: String, CaseIterable, Codable {
@@ -321,6 +369,7 @@ struct HistoryEntry: Identifiable, Codable {
     var id = UUID()
     let domain: String
     let timestamp: Date
+    var trackedDomainID: UUID?
     let dnsSections: [DNSSection]
     let sslInfo: SSLCertificateInfo?
     let httpHeaders: [HTTPHeader]
@@ -337,6 +386,12 @@ struct HistoryEntry: Identifiable, Codable {
     var resolverDisplayName: String
     var resolverURLString: String
     var totalLookupDurationMs: Int?
+    var primaryIP: String?
+    var finalRedirectURL: String?
+    var tlsStatusSummary: String?
+    var emailSecuritySummary: String?
+    var httpGradeSummary: String?
+    var changeSummary: DomainChangeSummary?
     var sslError: String?
     var httpHeadersError: String?
     var reachabilityError: String?
@@ -346,19 +401,22 @@ struct HistoryEntry: Identifiable, Codable {
     var redirectChainError: String?
     var portScanError: String?
 
-    init(domain: String, timestamp: Date, dnsSections: [DNSSection],
+    init(domain: String, timestamp: Date, trackedDomainID: UUID? = nil, dnsSections: [DNSSection],
          sslInfo: SSLCertificateInfo?, httpHeaders: [HTTPHeader],
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
          emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ptrRecord: String? = nil,
          redirectChain: [RedirectHop] = [], portScanResults: [PortScanResult] = [],
          hstsPreloaded: Bool? = nil, availabilityResult: DomainAvailabilityResult? = nil,
          suggestions: [DomainSuggestionResult] = [], resolverDisplayName: String, resolverURLString: String,
-         totalLookupDurationMs: Int? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
+         totalLookupDurationMs: Int? = nil, primaryIP: String? = nil, finalRedirectURL: String? = nil,
+         tlsStatusSummary: String? = nil, emailSecuritySummary: String? = nil, httpGradeSummary: String? = nil,
+         changeSummary: DomainChangeSummary? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
          reachabilityError: String? = nil, ipGeolocationError: String? = nil,
          emailSecurityError: String? = nil, ptrError: String? = nil,
          redirectChainError: String? = nil, portScanError: String? = nil) {
         self.domain = domain
         self.timestamp = timestamp
+        self.trackedDomainID = trackedDomainID
         self.dnsSections = dnsSections
         self.sslInfo = sslInfo
         self.httpHeaders = httpHeaders
@@ -375,6 +433,12 @@ struct HistoryEntry: Identifiable, Codable {
         self.resolverDisplayName = resolverDisplayName
         self.resolverURLString = resolverURLString
         self.totalLookupDurationMs = totalLookupDurationMs
+        self.primaryIP = primaryIP
+        self.finalRedirectURL = finalRedirectURL
+        self.tlsStatusSummary = tlsStatusSummary
+        self.emailSecuritySummary = emailSecuritySummary
+        self.httpGradeSummary = httpGradeSummary
+        self.changeSummary = changeSummary
         self.sslError = sslError
         self.httpHeadersError = httpHeadersError
         self.reachabilityError = reachabilityError
@@ -390,6 +454,7 @@ struct HistoryEntry: Identifiable, Codable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         domain = try container.decode(String.self, forKey: .domain)
         timestamp = try container.decode(Date.self, forKey: .timestamp)
+        trackedDomainID = try container.decodeIfPresent(UUID.self, forKey: .trackedDomainID)
         dnsSections = try container.decode([DNSSection].self, forKey: .dnsSections)
         sslInfo = try container.decodeIfPresent(SSLCertificateInfo.self, forKey: .sslInfo)
         httpHeaders = try container.decode([HTTPHeader].self, forKey: .httpHeaders)
@@ -406,6 +471,12 @@ struct HistoryEntry: Identifiable, Codable {
         resolverDisplayName = try container.decodeIfPresent(String.self, forKey: .resolverDisplayName) ?? "Cloudflare"
         resolverURLString = try container.decodeIfPresent(String.self, forKey: .resolverURLString) ?? DNSResolverOption.defaultURLString
         totalLookupDurationMs = try container.decodeIfPresent(Int.self, forKey: .totalLookupDurationMs)
+        primaryIP = try container.decodeIfPresent(String.self, forKey: .primaryIP)
+        finalRedirectURL = try container.decodeIfPresent(String.self, forKey: .finalRedirectURL)
+        tlsStatusSummary = try container.decodeIfPresent(String.self, forKey: .tlsStatusSummary)
+        emailSecuritySummary = try container.decodeIfPresent(String.self, forKey: .emailSecuritySummary)
+        httpGradeSummary = try container.decodeIfPresent(String.self, forKey: .httpGradeSummary)
+        changeSummary = try container.decodeIfPresent(DomainChangeSummary.self, forKey: .changeSummary)
         sslError = try container.decodeIfPresent(String.self, forKey: .sslError)
         httpHeadersError = try container.decodeIfPresent(String.self, forKey: .httpHeadersError)
         reachabilityError = try container.decodeIfPresent(String.self, forKey: .reachabilityError)

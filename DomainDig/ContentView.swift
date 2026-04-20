@@ -3,12 +3,16 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var viewModel = DomainViewModel()
+    @State private var navigationPath = NavigationPath()
     @FocusState private var domainFieldFocused: Bool
     @State private var customPortInput = ""
     @State private var customPortsExpanded = false
+    @State private var trackingNoteDraft = ""
+    @State private var editingTrackedDomain: TrackedDomain?
+    @State private var showTrackLimitAlert = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     inputSection
@@ -16,16 +20,42 @@ struct ContentView: View {
                         actionButtons
                         SummaryView(fields: viewModel.summaryFields)
                             .padding(.top, 8)
+                        if let changeSummary = viewModel.currentChangeSummary {
+                            DomainChangeSummaryView(summary: changeSummary)
+                                .padding(.top, 12)
+                        }
                         DomainSectionView(
                             rows: viewModel.domainRows,
                             suggestions: viewModel.suggestionRows,
                             showSuggestions: viewModel.availabilityResult?.status == .registered || viewModel.suggestionsLoading,
                             availabilityLoading: viewModel.availabilityLoading,
                             suggestionsLoading: viewModel.suggestionsLoading,
-                            isWatched: viewModel.isCurrentDomainWatched,
-                            onToggleWatch: { viewModel.toggleWatchedDomain() }
+                            trackedDomain: viewModel.currentTrackedDomain,
+                            trackingLimitMessage: viewModel.trackingLimitMessage,
+                            onTrack: {
+                                if !viewModel.trackCurrentDomain() {
+                                    showTrackLimitAlert = true
+                                }
+                            },
+                            onTogglePinned: {
+                                guard let trackedDomain = viewModel.currentTrackedDomain else { return }
+                                viewModel.togglePinned(for: trackedDomain)
+                            },
+                            onEditNote: {
+                                guard let trackedDomain = viewModel.currentTrackedDomain else { return }
+                                trackingNoteDraft = trackedDomain.note ?? ""
+                                editingTrackedDomain = trackedDomain
+                            }
                         )
                             .padding(.top, 16)
+                        if !viewModel.currentDiffSections.isEmpty {
+                            DomainDiffView(
+                                title: "Latest Changes",
+                                sections: viewModel.currentDiffSections,
+                                showsUnchanged: false
+                            )
+                            .padding(.top, 16)
+                        }
                         DNSSectionView(
                             dnssecLabel: viewModel.dnssecLabel,
                             sections: viewModel.dnsRows,
@@ -97,27 +127,31 @@ struct ContentView: View {
                         }
                     }
                     NavigationLink {
-                        SavedDomainsView(viewModel: viewModel)
-                    } label: {
-                        Image(systemName: "bookmark")
-                            .foregroundStyle(.secondary)
-                    }
-                    NavigationLink {
-                        HistoryView(viewModel: viewModel)
-                    } label: {
-                        Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
-                            .foregroundStyle(.secondary)
-                    }
-                    NavigationLink {
                         WatchlistView(viewModel: viewModel)
                     } label: {
                         Image(systemName: "eye")
                             .foregroundStyle(.secondary)
                     }
-                    NavigationLink {
-                        SettingsView()
+                    Menu {
+                        NavigationLink {
+                            HistoryView(viewModel: viewModel)
+                        } label: {
+                            Label("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
+                        }
+
+                        NavigationLink {
+                            SavedDomainsView(viewModel: viewModel)
+                        } label: {
+                            Label("Saved Domains", systemImage: "bookmark")
+                        }
+
+                        NavigationLink {
+                            SettingsView()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
                     } label: {
-                        Image(systemName: "gearshape")
+                        Image(systemName: "ellipsis.circle")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -125,6 +159,41 @@ struct ContentView: View {
         }
         .onAppear {
             domainFieldFocused = true
+        }
+        .onChange(of: viewModel.rerunNavigationToken) { _, _ in
+            navigationPath = NavigationPath()
+            domainFieldFocused = false
+        }
+        .alert("Tracking limit reached", isPresented: $showTrackLimitAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Free version supports up to 3 tracked domains. More tracked domains will be available in a future Pro upgrade.")
+        }
+        .sheet(item: $editingTrackedDomain) { trackedDomain in
+            NavigationStack {
+                Form {
+                    Section("Tracking Note") {
+                        TextField("Optional note", text: $trackingNoteDraft, axis: .vertical)
+                            .lineLimit(3...6)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                }
+                .navigationTitle(trackedDomain.domain)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            editingTrackedDomain = nil
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            viewModel.updateNote(trackingNoteDraft, for: trackedDomain)
+                            editingTrackedDomain = nil
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -292,29 +361,191 @@ struct SummaryView: View {
     }
 }
 
+struct DomainChangeSummaryView: View {
+    let summary: DomainChangeSummary
+
+    var body: some View {
+        CardView(allowsHorizontalScroll: false) {
+            HStack {
+                Label(summary.hasChanges ? "Changed" : "Unchanged", systemImage: summary.hasChanges ? "arrow.triangle.2.circlepath" : "checkmark.circle")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(summary.hasChanges ? .yellow : .green)
+                Spacer()
+                Text(summary.generatedAt, style: .time)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(summary.changedSections.isEmpty ? "No meaningful changes detected." : summary.changedSections.joined(separator: " • "))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.primary)
+        }
+    }
+}
+
+struct DomainDiffView: View {
+    let title: String
+    let sections: [DomainDiffSection]
+    let showsUnchanged: Bool
+
+    private var filteredSections: [DomainDiffSection] {
+        guard !showsUnchanged else { return sections }
+        return sections
+            .map { section in
+                DomainDiffSection(
+                    title: section.title,
+                    items: section.items.filter { $0.changeType != .unchanged }
+                )
+            }
+            .filter { !$0.items.isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: title)
+            if filteredSections.isEmpty {
+                MessageCardView(text: "No comparison data available", isError: false)
+            } else {
+                ForEach(filteredSections) { section in
+                    CardView(allowsHorizontalScroll: false) {
+                        Text(section.title)
+                            .font(.system(.subheadline, design: .monospaced))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.cyan)
+
+                        ForEach(section.items) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(item.label)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(changeLabel(for: item.changeType))
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundStyle(changeColor(for: item.changeType))
+                                }
+                                if let oldValue = item.oldValue {
+                                    Text("Old: \(oldValue)")
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                                if let newValue = item.newValue {
+                                    Text("New: \(newValue)")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.primary)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func changeLabel(for changeType: DiffChangeType) -> String {
+        switch changeType {
+        case .added:
+            return "Added"
+        case .removed:
+            return "Removed"
+        case .changed:
+            return "Changed"
+        case .unchanged:
+            return "Unchanged"
+        }
+    }
+
+    private func changeColor(for changeType: DiffChangeType) -> Color {
+        switch changeType {
+        case .added:
+            return .green
+        case .removed:
+            return .red
+        case .changed:
+            return .yellow
+        case .unchanged:
+            return .secondary
+        }
+    }
+}
+
+struct TrackedDomainDetailHeaderView: View {
+    let trackedDomain: TrackedDomain
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let note = trackedDomain.note?.nilIfEmpty {
+                LabeledValueRow(row: InfoRowViewData(label: "Tracking Note", value: note, tone: .secondary))
+            }
+            HStack(spacing: 8) {
+                if trackedDomain.isPinned {
+                    Label("Pinned", systemImage: "pin.fill")
+                }
+                Text("Last refresh \(trackedDomain.updatedAt.formatted(date: .abbreviated, time: .shortened))")
+            }
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct DomainSectionView: View {
     let rows: [InfoRowViewData]
     let suggestions: [DomainSuggestionViewData]
     let showSuggestions: Bool
     let availabilityLoading: Bool
     let suggestionsLoading: Bool
-    let isWatched: Bool
-    let onToggleWatch: () -> Void
+    let trackedDomain: TrackedDomain?
+    let trackingLimitMessage: String?
+    let onTrack: () -> Void
+    let onTogglePinned: () -> Void
+    let onEditNote: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 SectionTitleView(title: "Domain")
                 Spacer()
-                Button(isWatched ? "Watching" : "Watch") {
-                    onToggleWatch()
+                if let trackedDomain {
+                    HStack(spacing: 8) {
+                        Text("Tracked")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.green)
+                        Button {
+                            onTogglePinned()
+                        } label: {
+                            Image(systemName: trackedDomain.isPinned ? "pin.fill" : "pin")
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.system(.caption, design: .monospaced))
+                        if let onEditNote {
+                            Button("Note") {
+                                onEditNote()
+                            }
+                            .buttonStyle(.bordered)
+                            .font(.system(.caption, design: .monospaced))
+                        }
+                    }
+                } else {
+                    Button("Track") {
+                        onTrack()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(.caption, design: .monospaced))
                 }
-                .buttonStyle(.bordered)
-                .font(.system(.caption, design: .monospaced))
             }
-            CardView {
+            CardView(allowsHorizontalScroll: false) {
                 ForEach(rows) { row in
                     LabeledValueRow(row: row)
+                }
+                if let trackedDomain {
+                    TrackedDomainDetailHeaderView(trackedDomain: trackedDomain)
+                        .padding(.top, 4)
+                } else if let trackingLimitMessage {
+                    MessageRowView(text: trackingLimitMessage, isError: false)
+                        .padding(.top, 4)
                 }
                 if availabilityLoading {
                     ProgressView("Checking availability…")
@@ -885,6 +1116,12 @@ extension DateFormatter {
 private extension View {
     func appLoadingStyle() -> some View {
         font(.system(.caption, design: .monospaced))
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 

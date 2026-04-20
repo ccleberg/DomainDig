@@ -2,6 +2,8 @@ import SwiftUI
 
 struct HistoryView: View {
     @Bindable var viewModel: DomainViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var showClearAllConfirmation = false
 
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -50,8 +52,29 @@ struct HistoryView: View {
         .navigationTitle("History")
         .toolbar {
             if !viewModel.history.isEmpty {
-                EditButton()
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Clear All", role: .destructive) {
+                            showClearAllConfirmation = true
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+
+                    EditButton()
+                }
             }
+        }
+        .alert("Clear history?", isPresented: $showClearAllConfirmation) {
+            Button("Clear All", role: .destructive) {
+                viewModel.clearHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will delete all saved history entries. This cannot be undone.")
+        }
+        .onChange(of: viewModel.rerunNavigationToken) { _, _ in
+            dismiss()
         }
         .preferredColorScheme(.dark)
     }
@@ -60,6 +83,7 @@ struct HistoryView: View {
 struct HistoryDetailView: View {
     @Bindable var viewModel: DomainViewModel
     let entry: HistoryEntry
+    @Environment(\.dismiss) private var dismiss
 
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -84,12 +108,30 @@ struct HistoryDetailView: View {
                     showSuggestions: entry.availabilityResult?.status == .registered && !entry.suggestions.isEmpty,
                     availabilityLoading: false,
                     suggestionsLoading: false,
-                    isWatched: viewModel.watchedDomains.contains(where: { $0.domain.lowercased() == entry.domain.lowercased() }),
-                    onToggleWatch: {
-                        viewModel.toggleWatchedDomain(domain: entry.domain, availabilityStatus: entry.availabilityResult?.status)
-                    }
+                    trackedDomain: viewModel.trackedDomains.first(where: { $0.domain.lowercased() == entry.domain.lowercased() }),
+                    trackingLimitMessage: nil,
+                    onTrack: {
+                        _ = viewModel.trackDomain(domain: entry.domain, availabilityStatus: entry.availabilityResult?.status)
+                    },
+                    onTogglePinned: {
+                        guard let trackedDomain = viewModel.trackedDomains.first(where: { $0.domain.lowercased() == entry.domain.lowercased() }) else { return }
+                        viewModel.togglePinned(for: trackedDomain)
+                    },
+                    onEditNote: nil
                 )
                     .padding(.top, 16)
+                if let comparisonSnapshot = viewModel.comparisonSnapshot(for: entry) {
+                    if let changeSummary = entry.changeSummary {
+                        DomainChangeSummaryView(summary: changeSummary)
+                            .padding(.top, 16)
+                    }
+                    DomainDiffView(
+                        title: "Compared With Previous Snapshot",
+                        sections: DomainDiffService.diff(from: comparisonSnapshot, to: snapshot),
+                        showsUnchanged: false
+                    )
+                    .padding(.top, 16)
+                }
                 DNSSectionView(
                     dnssecLabel: DomainViewModel.dnssecLabel(from: snapshot),
                     sections: DomainViewModel.dnsRows(from: snapshot),
@@ -149,6 +191,9 @@ struct HistoryDetailView: View {
             Button("Re-run") {
                 viewModel.rerunLookup(from: entry)
             }
+        }
+        .onChange(of: viewModel.rerunNavigationToken) { _, _ in
+            dismiss()
         }
         .preferredColorScheme(.dark)
     }
