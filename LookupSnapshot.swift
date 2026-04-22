@@ -5,8 +5,20 @@ struct LookupSnapshot {
     let domain: String
     let timestamp: Date
     let trackedDomainID: UUID?
+    let note: String?
+    let appVersion: String
     let resolverDisplayName: String
     let resolverURLString: String
+    let dataSources: [String]
+    let provenanceBySection: [LookupSectionKind: SectionProvenance]
+    let availabilityConfidence: ConfidenceLevel?
+    let ownershipConfidence: ConfidenceLevel?
+    let subdomainConfidence: ConfidenceLevel?
+    let emailSecurityConfidence: ConfidenceLevel?
+    let geolocationConfidence: ConfidenceLevel?
+    let errorDetails: [LookupSectionKind: InspectionFailure]
+    let isPartialSnapshot: Bool
+    let validationIssues: [String]
     let totalLookupDurationMs: Int?
     let dnsSections: [DNSSection]
     let dnsError: String?
@@ -55,8 +67,20 @@ extension HistoryEntry {
             domain: domain,
             timestamp: timestamp,
             trackedDomainID: trackedDomainID,
+            note: note,
+            appVersion: appVersion,
             resolverDisplayName: resolverDisplayName,
             resolverURLString: resolverURLString,
+            dataSources: dataSources,
+            provenanceBySection: provenanceBySection,
+            availabilityConfidence: availabilityConfidence,
+            ownershipConfidence: ownershipConfidence,
+            subdomainConfidence: subdomainConfidence,
+            emailSecurityConfidence: emailSecurityConfidence,
+            geolocationConfidence: geolocationConfidence,
+            errorDetails: errorDetails,
+            isPartialSnapshot: isPartialSnapshot,
+            validationIssues: validationIssues,
             totalLookupDurationMs: totalLookupDurationMs,
             dnsSections: dnsSections,
             dnsError: nil,
@@ -89,7 +113,7 @@ extension HistoryEntry {
             portScanResults: portScanResults,
             portScanError: portScanError,
             changeSummary: changeSummary,
-            resultSource: .snapshot,
+            resultSource: resultSource,
             cachedSections: [],
             statusMessage: nil
         )

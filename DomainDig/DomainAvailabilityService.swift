@@ -15,8 +15,12 @@ struct DomainAvailabilityService {
         }
 
         let fallbackStatus = await checkViaDNSFallback(domain: normalizedDomain)
-        let method = fallbackStatus == .registered ? "dns" : "fallback"
-        debugLog(method, domain: normalizedDomain, status: fallbackStatus)
+        if fallbackStatus == .registered {
+            debugLog("dns-evidence", domain: normalizedDomain, details: "DNS exists but RDAP did not confirm registration")
+            return DomainAvailabilityResult(domain: normalizedDomain, status: .unknown)
+        }
+
+        debugLog("fallback", domain: normalizedDomain, status: fallbackStatus)
         return DomainAvailabilityResult(domain: normalizedDomain, status: fallbackStatus)
     }
 

@@ -36,9 +36,26 @@ enum DomainReportExporter {
             "DomainDig Report",
             "Domain: \(report.domain)",
             "Timestamp: \(textDateFormatter.string(from: report.timestamp))",
+            "App Version: \(report.appVersion)",
+            "Resolver: \(report.resolverDisplayName)",
+            "Resolver URL: \(report.resolverURLString)",
             "Source: \(report.resultSource.label)",
-            "Availability: \(availabilityLabel(report.availability))"
+            "Availability: \(availabilityLabel(report.availability))",
+            "Availability Confidence: \(report.availabilityConfidence?.title ?? "N/A")"
         ]
+
+        if report.isPartialSnapshot {
+            lines.append("Snapshot Integrity: Partial snapshot")
+        }
+        if let auditNote = report.auditNote, !auditNote.isEmpty {
+            lines.append("Audit Note: \(auditNote)")
+        }
+        if !report.dataSources.isEmpty {
+            lines.append("Data Sources: \(report.dataSources.joined(separator: ", "))")
+        }
+        if !report.validationIssues.isEmpty {
+            lines.append("Validation: \(report.validationIssues.joined(separator: " | "))")
+        }
 
         appendSection("Summary", to: &lines) {
             [
@@ -53,12 +70,16 @@ enum DomainReportExporter {
         appendSection("Ownership", to: &lines) {
             var ownershipLines = [
                 "Registrar: \(report.ownership?.registrar ?? "Unavailable")",
+                "Confidence: \(report.ownershipConfidence?.title ?? "N/A")",
                 "Created: \(ownershipDateLabel(report.ownership?.createdDate))",
                 "Expires: \(ownershipDateLabel(report.ownership?.expirationDate))",
                 "Nameservers: \(joined(report.ownership?.nameservers) ?? "Unavailable")",
                 "Status: \(joined(report.ownership?.status) ?? "Unavailable")",
                 "Abuse Contact: \(report.ownership?.abuseEmail ?? "Unavailable")"
             ]
+            if let provenance = report.sectionProvenance[.ownership] {
+                ownershipLines.append("Provenance: \(provenanceLabel(provenance))")
+            }
             if let error = report.dns.error, report.ownership == nil {
                 ownershipLines.append("Error: \(error)")
             } else if let error = report.changeSummary?.message, report.ownership == nil, report.ownership == nil {
@@ -69,13 +90,14 @@ enum DomainReportExporter {
 
         appendSection("DNS", to: &lines) {
             var dnsLines = [
-                "Resolver: \(report.dns.resolverDisplayName)",
-                "Resolver URL: \(report.dns.resolverURLString)",
                 "Lookup Duration: \(durationLabel(report.dns.lookupDurationMs))",
                 "Primary IP: \(report.dns.primaryIP ?? "Unavailable")",
                 "PTR: \(report.dns.ptrRecord ?? report.dns.ptrError ?? "Unavailable")",
                 "DNSSEC: \(dnssecLabel(report.dns.dnssecSigned))"
             ]
+            if let provenance = report.sectionProvenance[.dns] {
+                dnsLines.append("Provenance: \(provenanceLabel(provenance))")
+            }
             if let error = report.dns.error {
                 dnsLines.append("Error: \(error)")
             }
@@ -104,6 +126,15 @@ enum DomainReportExporter {
                 "HSTS Preloaded: \(booleanLabel(report.web.hstsPreloaded))",
                 "Header Count: \(report.web.headerCount)"
             ]
+            if let provenance = report.sectionProvenance[.ssl] {
+                webLines.append("TLS Provenance: \(provenanceLabel(provenance))")
+            }
+            if let provenance = report.sectionProvenance[.httpHeaders] {
+                webLines.append("HTTP Provenance: \(provenanceLabel(provenance))")
+            }
+            if let provenance = report.sectionProvenance[.redirectChain] {
+                webLines.append("Redirect Provenance: \(provenanceLabel(provenance))")
+            }
             if let tlsError = report.web.tlsError {
                 webLines.append("TLS Error: \(tlsError)")
             }
@@ -130,6 +161,10 @@ enum DomainReportExporter {
 
         appendSection("Email", to: &lines) {
             var emailLines = [report.email.summary]
+            emailLines.append("Confidence: \(report.emailConfidence?.title ?? "N/A")")
+            if let provenance = report.sectionProvenance[.emailSecurity] {
+                emailLines.append("Provenance: \(provenanceLabel(provenance))")
+            }
             if let records = report.email.records {
                 emailLines.append("SPF: \(recordLabel(records.spf))")
                 emailLines.append("DMARC: \(recordLabel(records.dmarc))")
@@ -147,8 +182,12 @@ enum DomainReportExporter {
             var networkLines = [
                 "Reachability: \(report.network.reachabilitySummary)",
                 "Geolocation: \(report.network.geolocationSummary)",
+                "Geolocation Confidence: \(report.geolocationConfidence?.title ?? "N/A")",
                 "Open Ports: \(report.network.openPorts.map(String.init).joined(separator: ", ").nilIfEmpty ?? "None")"
             ]
+            if let provenance = report.sectionProvenance[.ipGeolocation] {
+                networkLines.append("Geolocation Provenance: \(provenanceLabel(provenance))")
+            }
             if let error = report.network.reachabilityError {
                 networkLines.append("Reachability Error: \(error)")
             }
@@ -170,10 +209,16 @@ enum DomainReportExporter {
         }
 
         appendSection("Subdomains", to: &lines) {
-            if report.subdomains.isEmpty {
-                return ["None"]
+            var values = ["Confidence: \(report.subdomainConfidence?.title ?? "N/A")"]
+            if let provenance = report.sectionProvenance[.subdomains] {
+                values.append("Provenance: \(provenanceLabel(provenance))")
             }
-            return report.subdomains.map { "- \($0)" }
+            if report.subdomains.isEmpty {
+                values.append("None")
+                return values
+            }
+            values.append(contentsOf: report.subdomains.map { "- \($0)" })
+            return values
         }
 
         appendSection("Changes", to: &lines) {
@@ -181,12 +226,19 @@ enum DomainReportExporter {
                 return ["No comparison available"]
             }
 
-            return [
+            var values = [
                 "Has Changes: \(changeSummary.hasChanges ? "Yes" : "No")",
                 "Severity: \(changeSummary.severity.title)",
-                "Summary: \(changeSummary.message)",
+                "Inferred Summary: \(changeSummary.message)",
                 "Changed Sections: \(changeSummary.changedSections.isEmpty ? "None" : changeSummary.changedSections.joined(separator: ", "))"
             ]
+            if !changeSummary.observedFacts.isEmpty {
+                values.append("Observed: \(changeSummary.observedFacts.joined(separator: " | "))")
+            }
+            if let contextNote = changeSummary.contextNote {
+                values.append("Context: \(contextNote)")
+            }
+            return values
         }
 
         return lines.joined(separator: "\n")
@@ -213,9 +265,13 @@ enum DomainReportExporter {
         let headers = [
             "domain",
             "timestamp",
+            "app_version",
             "result_source",
+            "resolver",
             "availability",
+            "availability_confidence",
             "registrar",
+            "ownership_confidence",
             "ownership_expires",
             "nameservers",
             "primary_ip",
@@ -228,11 +284,17 @@ enum DomainReportExporter {
             "http_security_grade",
             "final_url",
             "email_summary",
+            "email_confidence",
             "subdomain_count",
+            "subdomain_confidence",
             "subdomains",
             "open_ports",
             "reachability_summary",
             "geolocation_summary",
+            "geolocation_confidence",
+            "data_sources",
+            "audit_note",
+            "partial_snapshot",
             "change_summary"
         ]
 
@@ -249,9 +311,13 @@ enum DomainReportExporter {
             return [
                 report.domain,
                 csvDateFormatter.string(from: report.timestamp),
+                report.appVersion,
                 report.resultSource.rawValue,
+                report.resolverDisplayName,
                 availabilityLabel(report.availability),
+                report.availabilityConfidence?.rawValue ?? "",
                 report.ownership?.registrar ?? "",
+                report.ownershipConfidence?.rawValue ?? "",
                 expirationDate,
                 nameservers,
                 report.dns.primaryIP ?? "",
@@ -264,11 +330,17 @@ enum DomainReportExporter {
                 report.web.securityGrade ?? "",
                 report.web.finalURL ?? "",
                 report.email.summary,
+                report.emailConfidence?.rawValue ?? "",
                 subdomainCount,
+                report.subdomainConfidence?.rawValue ?? "",
                 subdomains,
                 openPorts,
                 report.network.reachabilitySummary,
                 report.network.geolocationSummary,
+                report.geolocationConfidence?.rawValue ?? "",
+                report.dataSources.joined(separator: " | "),
+                report.auditNote ?? "",
+                report.isPartialSnapshot ? "true" : "false",
                 report.changeSummary?.message ?? ""
             ]
         }
@@ -336,6 +408,18 @@ enum DomainReportExporter {
             return record.value ?? "Present"
         }
         return "Unavailable"
+    }
+
+    private static func provenanceLabel(_ provenance: SectionProvenance) -> String {
+        [
+            provenance.source,
+            provenance.provider,
+            provenance.resolver.map { "resolver=\($0)" },
+            provenance.resultSource.label.lowercased(),
+            textDateFormatter.string(from: provenance.collectedAt)
+        ]
+        .compactMap { $0 }
+        .joined(separator: " | ")
     }
 
     private static let textDateFormatter: DateFormatter = {

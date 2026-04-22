@@ -3,8 +3,22 @@ import Foundation
 struct DomainReport: Codable {
     let domain: String
     let timestamp: Date
+    let appVersion: String
+    let resolverDisplayName: String
+    let resolverURLString: String
+    let dataSources: [String]
     let resultSource: LookupResultSource
+    let sectionProvenance: [LookupSectionKind: SectionProvenance]
+    let errorDetails: [LookupSectionKind: InspectionFailure]
+    let isPartialSnapshot: Bool
+    let validationIssues: [String]
+    let auditNote: String?
     let availability: DomainAvailabilityStatus
+    let availabilityConfidence: ConfidenceLevel?
+    let ownershipConfidence: ConfidenceLevel?
+    let subdomainConfidence: ConfidenceLevel?
+    let emailConfidence: ConfidenceLevel?
+    let geolocationConfidence: ConfidenceLevel?
     let ownership: DomainOwnership?
     let dns: DNSResultSummary
     let web: WebResultSummary
@@ -71,8 +85,22 @@ struct DomainReportBuilder {
         return DomainReport(
             domain: snapshot.domain,
             timestamp: snapshot.timestamp,
+            appVersion: snapshot.appVersion,
+            resolverDisplayName: snapshot.resolverDisplayName,
+            resolverURLString: snapshot.resolverURLString,
+            dataSources: snapshot.dataSources,
             resultSource: snapshot.resultSource,
+            sectionProvenance: snapshot.provenanceBySection,
+            errorDetails: snapshot.errorDetails,
+            isPartialSnapshot: snapshot.isPartialSnapshot,
+            validationIssues: snapshot.validationIssues,
+            auditNote: snapshot.note,
             availability: snapshot.availabilityResult?.status ?? .unknown,
+            availabilityConfidence: snapshot.availabilityConfidence,
+            ownershipConfidence: snapshot.ownershipConfidence,
+            subdomainConfidence: snapshot.subdomainConfidence,
+            emailConfidence: snapshot.emailSecurityConfidence,
+            geolocationConfidence: snapshot.geolocationConfidence,
             ownership: snapshot.ownership,
             dns: DNSResultSummary(
                 resolverDisplayName: snapshot.resolverDisplayName,

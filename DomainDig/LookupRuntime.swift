@@ -79,15 +79,9 @@ actor LookupRuntime {
     }
 
     func availability(domain: String) async -> CachedLookupResult<DomainAvailabilityResult> {
-        await execute(
-            key: .domain(domain, .availability),
-            extract: { payload in
-                guard case let .availability(result) = payload else { return nil }
-                return result
-            },
-            operation: {
-                .availability(await DomainAvailabilityService.check(domain: domain))
-            }
+        CachedLookupResult(
+            value: await DomainAvailabilityService.check(domain: domain),
+            source: .live
         )
     }
 

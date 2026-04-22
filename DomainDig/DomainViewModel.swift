@@ -87,6 +87,7 @@ struct SubdomainRowViewData: Identifiable {
 struct DomainSuggestionViewData: Identifiable {
     let id: UUID
     let domain: String
+    let availabilityStatus: DomainAvailabilityStatus
     let status: String
     let tone: ResultTone
 }
@@ -204,13 +205,7 @@ final class DomainViewModel {
 
     private static let historyKey = "lookupHistory"
     private static let maxHistory = 250
-    var history: [HistoryEntry] = {
-        guard let data = UserDefaults.standard.data(forKey: historyKey),
-              let entries = try? JSONDecoder().decode([HistoryEntry].self, from: data) else {
-            return []
-        }
-        return entries
-    }()
+    var history: [HistoryEntry] = DomainViewModel.loadHistoryEntries()
     var historySearchText = ""
     var historyDateFilter: HistoryDateFilter = .all
     var historyChangeFilter: ChangeFilterOption = .all
@@ -244,6 +239,24 @@ final class DomainViewModel {
             !subdomainsLoading &&
             !portScanLoading &&
             !customPortScanLoading
+    }
+
+    var activeLoadingLabels: [String] {
+        var labels: [String] = []
+        if availabilityLoading { labels.append("Availability") }
+        if dnsLoading { labels.append("DNS") }
+        if sslLoading || hstsLoading { labels.append("TLS") }
+        if httpHeadersLoading { labels.append("HTTP") }
+        if ownershipLoading { labels.append("Ownership") }
+        if emailSecurityLoading { labels.append("Email") }
+        if subdomainsLoading { labels.append("Subdomains") }
+        if redirectChainLoading { labels.append("Redirects") }
+        if reachabilityLoading { labels.append("Reachability") }
+        if ipGeolocationLoading { labels.append("Geolocation") }
+        if ptrLoading { labels.append("PTR") }
+        if portScanLoading { labels.append("Port Scan") }
+        if customPortScanLoading { labels.append("Custom Ports") }
+        return labels
     }
 
     var isCloudflareProxied: Bool {
@@ -365,8 +378,20 @@ final class DomainViewModel {
             domain: searchedDomain,
             timestamp: currentSnapshotTimestamp,
             trackedDomainID: currentTrackedDomain?.id,
+            note: currentHistoryEntry?.note ?? currentTrackedDomain?.note,
+            appVersion: AppVersion.current,
             resolverDisplayName: resolverDisplayName,
             resolverURLString: resolverURLString,
+            dataSources: currentHistoryEntry?.dataSources ?? [],
+            provenanceBySection: currentHistoryEntry?.provenanceBySection ?? [:],
+            availabilityConfidence: currentHistoryEntry?.availabilityConfidence,
+            ownershipConfidence: currentHistoryEntry?.ownershipConfidence,
+            subdomainConfidence: currentHistoryEntry?.subdomainConfidence,
+            emailSecurityConfidence: currentHistoryEntry?.emailSecurityConfidence,
+            geolocationConfidence: currentHistoryEntry?.geolocationConfidence,
+            errorDetails: currentHistoryEntry?.errorDetails ?? [:],
+            isPartialSnapshot: currentHistoryEntry?.isPartialSnapshot ?? false,
+            validationIssues: currentHistoryEntry?.validationIssues ?? [],
             totalLookupDurationMs: lastLookupDurationMs,
             dnsSections: dnsSections,
             dnsError: dnsError,
@@ -403,6 +428,11 @@ final class DomainViewModel {
             cachedSections: currentCachedSections,
             statusMessage: currentStatusMessage
         )
+    }
+
+    private var currentHistoryEntry: HistoryEntry? {
+        guard let currentHistoryEntryID else { return nil }
+        return history.first(where: { $0.id == currentHistoryEntryID })
     }
 
     var currentReport: DomainReport? {
@@ -543,9 +573,7 @@ final class DomainViewModel {
     }
 
     func rerunInspection(for trackedDomain: TrackedDomain) {
-        domain = trackedDomain.domain
-        run()
-        rerunNavigationToken = UUID()
+        rerunInspection(for: trackedDomain, useSnapshotResolver: false)
     }
 
     func deleteTrackedDomains(at offsets: IndexSet) {
@@ -609,9 +637,20 @@ final class DomainViewModel {
         UserDefaults.standard.removeObject(forKey: Self.recentSearchesKey)
     }
 
-    func rerunLookup(from entry: HistoryEntry) {
-        UserDefaults.standard.set(entry.resolverURLString, forKey: DNSResolverOption.userDefaultsKey)
+    func rerunLookup(from entry: HistoryEntry, useSnapshotResolver: Bool) {
+        if useSnapshotResolver {
+            UserDefaults.standard.set(entry.resolverURLString, forKey: DNSResolverOption.userDefaultsKey)
+        }
         domain = entry.domain
+        run()
+        rerunNavigationToken = UUID()
+    }
+
+    func rerunInspection(for trackedDomain: TrackedDomain, useSnapshotResolver: Bool) {
+        if useSnapshotResolver, let snapshot = latestSnapshot(for: trackedDomain) {
+            UserDefaults.standard.set(snapshot.resolverURLString, forKey: DNSResolverOption.userDefaultsKey)
+        }
+        domain = trackedDomain.domain
         run()
         rerunNavigationToken = UUID()
     }
@@ -853,8 +892,20 @@ final class DomainViewModel {
             domain: previousSnapshot.domain,
             timestamp: previousSnapshot.timestamp,
             trackedDomainID: previousSnapshot.trackedDomainID,
+            note: previousSnapshot.note,
+            appVersion: previousSnapshot.appVersion,
             resolverDisplayName: previousSnapshot.resolverDisplayName,
             resolverURLString: previousSnapshot.resolverURLString,
+            dataSources: previousSnapshot.dataSources,
+            provenanceBySection: previousSnapshot.provenanceBySection,
+            availabilityConfidence: previousSnapshot.availabilityConfidence,
+            ownershipConfidence: previousSnapshot.ownershipConfidence,
+            subdomainConfidence: previousSnapshot.subdomainConfidence,
+            emailSecurityConfidence: previousSnapshot.emailSecurityConfidence,
+            geolocationConfidence: previousSnapshot.geolocationConfidence,
+            errorDetails: previousSnapshot.errorDetails,
+            isPartialSnapshot: previousSnapshot.isPartialSnapshot,
+            validationIssues: previousSnapshot.validationIssues,
             totalLookupDurationMs: previousSnapshot.totalLookupDurationMs,
             dnsSections: previousSnapshot.dnsSections,
             dnsError: previousSnapshot.dnsError,
@@ -1232,6 +1283,7 @@ final class DomainViewModel {
             domain: snapshot.domain,
             timestamp: snapshot.timestamp,
             trackedDomainID: trackedDomainID,
+            note: currentHistoryEntry?.note,
             dnsSections: snapshot.dnsSections,
             sslInfo: snapshot.sslInfo,
             httpHeaders: snapshot.httpHeaders,
@@ -1247,6 +1299,18 @@ final class DomainViewModel {
             hstsPreloaded: snapshot.hstsPreloaded,
             availabilityResult: snapshot.availabilityResult,
             suggestions: snapshot.suggestions,
+            appVersion: snapshot.appVersion,
+            resultSource: snapshot.resultSource,
+            dataSources: snapshot.dataSources,
+            provenanceBySection: snapshot.provenanceBySection,
+            availabilityConfidence: snapshot.availabilityConfidence,
+            ownershipConfidence: snapshot.ownershipConfidence,
+            subdomainConfidence: snapshot.subdomainConfidence,
+            emailSecurityConfidence: snapshot.emailSecurityConfidence,
+            geolocationConfidence: snapshot.geolocationConfidence,
+            errorDetails: snapshot.errorDetails,
+            isPartialSnapshot: snapshot.isPartialSnapshot,
+            validationIssues: snapshot.validationIssues,
             resolverDisplayName: snapshot.resolverDisplayName,
             resolverURLString: snapshot.resolverURLString,
             totalLookupDurationMs: snapshot.totalLookupDurationMs,
@@ -1300,6 +1364,12 @@ final class DomainViewModel {
         if let data = try? JSONEncoder().encode(history) {
             UserDefaults.standard.set(data, forKey: Self.historyKey)
         }
+    }
+
+    func updateHistoryNote(_ note: String, for entry: HistoryEntry) {
+        guard let index = history.firstIndex(where: { $0.id == entry.id }) else { return }
+        history[index].note = note.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        persistHistory()
     }
 
     private func persistTrackedDomains() {
@@ -1777,6 +1847,22 @@ final class DomainViewModel {
         trackedDomain.lastChangeSummary ?? recentSnapshots(for: trackedDomain, limit: 1).first?.changeSummary
     }
 
+    func latestSnapshot(for trackedDomain: TrackedDomain) -> LookupSnapshot? {
+        recentSnapshots(for: trackedDomain, limit: 1).first?.snapshot
+    }
+
+    func resolverMismatchNote(for entry: HistoryEntry) -> String? {
+        guard entry.resolverURLString != resolverURLString else { return nil }
+        return "Current resolver differs from this snapshot. Re-running may produce different evidence."
+    }
+
+    func resolverMismatchNote(for trackedDomain: TrackedDomain) -> String? {
+        guard let snapshot = latestSnapshot(for: trackedDomain), snapshot.resolverURLString != resolverURLString else {
+            return nil
+        }
+        return "Current resolver differs from the latest snapshot for this tracked domain."
+    }
+
     func comparisonSnapshot(for entry: HistoryEntry) -> LookupSnapshot? {
         let siblings = history.filter { candidate in
             if let trackedDomainID = entry.trackedDomainID {
@@ -1834,8 +1920,20 @@ final class DomainViewModel {
             domain: trackedDomain.domain,
             timestamp: trackedDomain.updatedAt,
             trackedDomainID: trackedDomain.id,
+            note: trackedDomain.note,
+            appVersion: AppVersion.current,
             resolverDisplayName: resolverDisplayName,
             resolverURLString: resolverURLString,
+            dataSources: [],
+            provenanceBySection: [:],
+            availabilityConfidence: nil,
+            ownershipConfidence: nil,
+            subdomainConfidence: nil,
+            emailSecurityConfidence: nil,
+            geolocationConfidence: nil,
+            errorDetails: [:],
+            isPartialSnapshot: true,
+            validationIssues: ["No stored snapshot data available"],
             totalLookupDurationMs: nil,
             dnsSections: [],
             dnsError: nil,
@@ -1872,6 +1970,31 @@ final class DomainViewModel {
             cachedSections: [],
             statusMessage: nil
         )
+    }
+
+    private static func loadHistoryEntries() -> [HistoryEntry] {
+        let defaults = UserDefaults.standard
+        guard let data = defaults.data(forKey: historyKey) else {
+            return []
+        }
+
+        if let entries = try? JSONDecoder().decode([HistoryEntry].self, from: data) {
+            return entries
+        }
+
+        guard let rawArray = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        return rawArray.compactMap { item in
+            guard JSONSerialization.isValidJSONObject(item),
+                  let itemData = try? JSONSerialization.data(withJSONObject: item),
+                  let entry = try? decoder.decode(HistoryEntry.self, from: itemData) else {
+                return nil
+            }
+            return entry
+        }
     }
 
     private static func loadTrackedDomains() -> [TrackedDomain] {
@@ -1953,10 +2076,11 @@ final class DomainViewModel {
     static func summaryFields(from snapshot: LookupSnapshot) -> [SummaryFieldViewData] {
         [
             SummaryFieldViewData(label: "Domain", value: snapshot.domain.nonEmpty ?? "Unavailable", tone: .primary),
-            SummaryFieldViewData(label: "Primary IP", value: primaryIPAddress(from: snapshot) ?? "Unavailable", tone: .primary),
-            SummaryFieldViewData(label: "HTTPS", value: httpsSummary(from: snapshot), tone: httpsSummaryTone(from: snapshot)),
+            SummaryFieldViewData(label: "Observed IP", value: primaryIPAddress(from: snapshot) ?? "Unavailable", tone: .primary),
+            SummaryFieldViewData(label: "Observed Redirect", value: finalRedirectTarget(from: snapshot) ?? "Unavailable", tone: .secondary),
+            SummaryFieldViewData(label: "Inference", value: availabilityInference(from: snapshot), tone: availabilityTone(snapshot.availabilityResult?.status)),
+            SummaryFieldViewData(label: "Observed TLS", value: httpsSummary(from: snapshot), tone: httpsSummaryTone(from: snapshot)),
             SummaryFieldViewData(label: "Certificate", value: certificateStatusLabel(from: snapshot), tone: certificateStatusTone(from: snapshot)),
-            SummaryFieldViewData(label: "Redirect", value: finalRedirectTarget(from: snapshot) ?? "Unavailable", tone: .secondary),
             SummaryFieldViewData(label: "Source", value: snapshot.statusMessage ?? snapshot.resultSource.label, tone: sourceTone(for: snapshot))
         ]
     }
@@ -1965,17 +2089,32 @@ final class DomainViewModel {
         var rows = [
             InfoRowViewData(label: "Domain", value: snapshot.domain, tone: .primary),
             InfoRowViewData(label: "Resolver", value: snapshot.resolverDisplayName, tone: .secondary),
+            InfoRowViewData(label: "Collected", value: snapshot.timestamp.formatted(date: .abbreviated, time: .shortened), tone: .secondary),
             InfoRowViewData(label: snapshot.statusMessage == nil ? "Result" : "Snapshot", value: snapshot.statusMessage ?? snapshot.resultSource.label, tone: sourceTone(for: snapshot)),
             InfoRowViewData(label: "Lookup Duration", value: durationLabel(snapshot.totalLookupDurationMs), tone: .secondary)
         ]
         rows.insert(
             InfoRowViewData(
-                label: "Availability",
-                value: availabilityLabel(snapshot.availabilityResult?.status),
-                tone: availabilityTone(snapshot.availabilityResult?.status)
+                label: "Observed Availability",
+                value: snapshot.availabilityResult?.status == .unknown ? "No direct registration proof" : "Status collected",
+                tone: .secondary
             ),
             at: 1
         )
+        rows.insert(
+            InfoRowViewData(
+                label: "Inference",
+                value: availabilityInference(from: snapshot),
+                tone: availabilityTone(snapshot.availabilityResult?.status)
+            ),
+            at: 2
+        )
+        if let confidence = snapshot.availabilityConfidence {
+            rows.insert(
+                InfoRowViewData(label: "Confidence", value: confidence.title, tone: .secondary),
+                at: 3
+            )
+        }
         if let certificateStatus = certificateBadgeLabel(from: snapshot) {
             rows.insert(
                 InfoRowViewData(
@@ -1994,6 +2133,7 @@ final class DomainViewModel {
             DomainSuggestionViewData(
                 id: $0.id,
                 domain: $0.domain,
+                availabilityStatus: $0.status,
                 status: availabilityLabel($0.status),
                 tone: availabilityTone($0.status)
             )
@@ -2559,6 +2699,17 @@ final class DomainViewModel {
             return "Registered"
         case .unknown, .none:
             return "Unknown"
+        }
+    }
+
+    private static func availabilityInference(from snapshot: LookupSnapshot) -> String {
+        switch snapshot.availabilityResult?.status {
+        case .registered:
+            return "Likely registered"
+        case .available:
+            return "Possibly available"
+        case .unknown, .none:
+            return "Unclear"
         }
     }
 

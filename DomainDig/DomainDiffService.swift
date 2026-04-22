@@ -67,14 +67,31 @@ enum DomainDiffService {
         let highlights = summaryHighlights(from: allChangedItems)
         let severity = allChangedItems.map(\.severity).max() ?? .low
         let message = summaryMessage(from: allChangedItems, highlights: highlights)
+        let observedFacts = observedFacts(from: allChangedItems)
+        let inferredConclusions = highlights.isEmpty ? [] : [message]
+        let contextNote = comparisonContextNote(from: oldSnapshot, to: newSnapshot)
 
         return DomainChangeSummary(
             hasChanges: !allChangedItems.isEmpty,
             changedSections: highlights,
             message: message,
             severity: severity,
-            generatedAt: generatedAt
+            generatedAt: generatedAt,
+            observedFacts: observedFacts,
+            inferredConclusions: inferredConclusions,
+            contextNote: contextNote
         )
+    }
+
+    static func comparisonContextNote(from oldSnapshot: LookupSnapshot, to newSnapshot: LookupSnapshot) -> String? {
+        var notes: [String] = []
+        if oldSnapshot.resolverURLString != newSnapshot.resolverURLString {
+            notes.append("Compared snapshots used different DNS resolvers.")
+        }
+        if oldSnapshot.resultSource != newSnapshot.resultSource {
+            notes.append("Compared snapshots came from different collection modes.")
+        }
+        return notes.isEmpty ? nil : notes.joined(separator: " ")
     }
 
     static func certificateWarningLevel(for snapshot: LookupSnapshot) -> CertificateWarningLevel {
@@ -408,6 +425,14 @@ enum DomainDiffService {
         }
 
         return "\(highlights[0]) and \(highlights[1].lowercased())"
+    }
+
+    private static func observedFacts(from items: [DomainDiffItem]) -> [String] {
+        items.prefix(3).map { item in
+            let oldValue = item.oldValue ?? "none"
+            let newValue = item.newValue ?? "none"
+            return "\(item.label): \(oldValue) -> \(newValue)"
+        }
     }
 
     private static func normalized(_ value: String?) -> String? {

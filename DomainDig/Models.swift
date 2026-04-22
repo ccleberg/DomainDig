@@ -6,6 +6,59 @@ enum ServiceResult<Value> {
     case error(String)
 }
 
+enum ConfidenceLevel: String, Codable {
+    case high
+    case medium
+    case low
+
+    var title: String {
+        rawValue.capitalized
+    }
+}
+
+enum InspectionErrorKind: String, Codable {
+    case network
+    case timeout
+    case rateLimited
+    case parsing
+    case unsupported
+    case unavailable
+    case unknown
+
+    var title: String {
+        switch self {
+        case .network:
+            return "Network"
+        case .timeout:
+            return "Timeout"
+        case .rateLimited:
+            return "Rate limited"
+        case .parsing:
+            return "Parsing"
+        case .unsupported:
+            return "Unsupported"
+        case .unavailable:
+            return "Unavailable"
+        case .unknown:
+            return "Unknown"
+        }
+    }
+}
+
+struct InspectionFailure: Codable, Equatable {
+    let kind: InspectionErrorKind
+    let message: String
+    let details: String?
+}
+
+struct SectionProvenance: Codable, Equatable {
+    let source: String
+    let collectedAt: Date
+    let provider: String?
+    let resolver: String?
+    let resultSource: LookupResultSource
+}
+
 enum LookupResultSource: String, Codable {
     case live
     case cached
@@ -129,19 +182,28 @@ struct DomainChangeSummary: Codable, Equatable {
     let message: String
     let severity: ChangeSeverity
     let generatedAt: Date
+    let observedFacts: [String]
+    let inferredConclusions: [String]
+    let contextNote: String?
 
     init(
         hasChanges: Bool,
         changedSections: [String],
         message: String,
         severity: ChangeSeverity,
-        generatedAt: Date
+        generatedAt: Date,
+        observedFacts: [String] = [],
+        inferredConclusions: [String] = [],
+        contextNote: String? = nil
     ) {
         self.hasChanges = hasChanges
         self.changedSections = changedSections
         self.message = message
         self.severity = severity
         self.generatedAt = generatedAt
+        self.observedFacts = observedFacts
+        self.inferredConclusions = inferredConclusions
+        self.contextNote = contextNote
     }
 
     init(from decoder: Decoder) throws {
@@ -152,6 +214,9 @@ struct DomainChangeSummary: Codable, Equatable {
         severity = try container.decodeIfPresent(ChangeSeverity.self, forKey: .severity) ?? (hasChanges ? .medium : .low)
         message = try container.decodeIfPresent(String.self, forKey: .message)
             ?? (changedSections.isEmpty ? "No meaningful changes" : changedSections.joined(separator: " • "))
+        observedFacts = try container.decodeIfPresent([String].self, forKey: .observedFacts) ?? []
+        inferredConclusions = try container.decodeIfPresent([String].self, forKey: .inferredConclusions) ?? []
+        contextNote = try container.decodeIfPresent(String.self, forKey: .contextNote)
     }
 }
 
@@ -709,6 +774,7 @@ struct HistoryEntry: Identifiable, Codable {
     let domain: String
     let timestamp: Date
     var trackedDomainID: UUID?
+    var note: String?
     let dnsSections: [DNSSection]
     let sslInfo: SSLCertificateInfo?
     let httpHeaders: [HTTPHeader]
@@ -724,6 +790,18 @@ struct HistoryEntry: Identifiable, Codable {
     var hstsPreloaded: Bool?
     var availabilityResult: DomainAvailabilityResult?
     var suggestions: [DomainSuggestionResult]
+    var appVersion: String
+    var resultSource: LookupResultSource
+    var dataSources: [String]
+    var provenanceBySection: [LookupSectionKind: SectionProvenance]
+    var availabilityConfidence: ConfidenceLevel?
+    var ownershipConfidence: ConfidenceLevel?
+    var subdomainConfidence: ConfidenceLevel?
+    var emailSecurityConfidence: ConfidenceLevel?
+    var geolocationConfidence: ConfidenceLevel?
+    var errorDetails: [LookupSectionKind: InspectionFailure]
+    var isPartialSnapshot: Bool
+    var validationIssues: [String]
     var resolverDisplayName: String
     var resolverURLString: String
     var totalLookupDurationMs: Int?
@@ -744,14 +822,21 @@ struct HistoryEntry: Identifiable, Codable {
     var subdomainsError: String?
     var portScanError: String?
 
-    init(domain: String, timestamp: Date, trackedDomainID: UUID? = nil, dnsSections: [DNSSection],
+    init(domain: String, timestamp: Date, trackedDomainID: UUID? = nil, note: String? = nil, dnsSections: [DNSSection],
          sslInfo: SSLCertificateInfo?, httpHeaders: [HTTPHeader],
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
          emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ownership: DomainOwnership? = nil,
          ptrRecord: String? = nil, redirectChain: [RedirectHop] = [], subdomains: [DiscoveredSubdomain] = [],
          portScanResults: [PortScanResult] = [],
          hstsPreloaded: Bool? = nil, availabilityResult: DomainAvailabilityResult? = nil,
-         suggestions: [DomainSuggestionResult] = [], resolverDisplayName: String, resolverURLString: String,
+         suggestions: [DomainSuggestionResult] = [], appVersion: String = "2.7.0",
+         resultSource: LookupResultSource = .snapshot, dataSources: [String] = [],
+         provenanceBySection: [LookupSectionKind: SectionProvenance] = [:],
+         availabilityConfidence: ConfidenceLevel? = nil, ownershipConfidence: ConfidenceLevel? = nil,
+         subdomainConfidence: ConfidenceLevel? = nil, emailSecurityConfidence: ConfidenceLevel? = nil,
+         geolocationConfidence: ConfidenceLevel? = nil,
+         errorDetails: [LookupSectionKind: InspectionFailure] = [:], isPartialSnapshot: Bool = false,
+         validationIssues: [String] = [], resolverDisplayName: String, resolverURLString: String,
          totalLookupDurationMs: Int? = nil, primaryIP: String? = nil, finalRedirectURL: String? = nil,
          tlsStatusSummary: String? = nil, emailSecuritySummary: String? = nil, httpGradeSummary: String? = nil,
          changeSummary: DomainChangeSummary? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
@@ -761,6 +846,7 @@ struct HistoryEntry: Identifiable, Codable {
         self.domain = domain
         self.timestamp = timestamp
         self.trackedDomainID = trackedDomainID
+        self.note = note
         self.dnsSections = dnsSections
         self.sslInfo = sslInfo
         self.httpHeaders = httpHeaders
@@ -776,6 +862,18 @@ struct HistoryEntry: Identifiable, Codable {
         self.hstsPreloaded = hstsPreloaded
         self.availabilityResult = availabilityResult
         self.suggestions = suggestions
+        self.appVersion = appVersion
+        self.resultSource = resultSource
+        self.dataSources = dataSources
+        self.provenanceBySection = provenanceBySection
+        self.availabilityConfidence = availabilityConfidence
+        self.ownershipConfidence = ownershipConfidence
+        self.subdomainConfidence = subdomainConfidence
+        self.emailSecurityConfidence = emailSecurityConfidence
+        self.geolocationConfidence = geolocationConfidence
+        self.errorDetails = errorDetails
+        self.isPartialSnapshot = isPartialSnapshot
+        self.validationIssues = validationIssues
         self.resolverDisplayName = resolverDisplayName
         self.resolverURLString = resolverURLString
         self.totalLookupDurationMs = totalLookupDurationMs
@@ -800,13 +898,14 @@ struct HistoryEntry: Identifiable, Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        domain = try container.decode(String.self, forKey: .domain)
-        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        domain = try container.decodeIfPresent(String.self, forKey: .domain) ?? "unknown-domain"
+        timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? .distantPast
         trackedDomainID = try container.decodeIfPresent(UUID.self, forKey: .trackedDomainID)
-        dnsSections = try container.decode([DNSSection].self, forKey: .dnsSections)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        dnsSections = try container.decodeIfPresent([DNSSection].self, forKey: .dnsSections) ?? []
         sslInfo = try container.decodeIfPresent(SSLCertificateInfo.self, forKey: .sslInfo)
-        httpHeaders = try container.decode([HTTPHeader].self, forKey: .httpHeaders)
-        reachabilityResults = try container.decode([PortReachability].self, forKey: .reachabilityResults)
+        httpHeaders = try container.decodeIfPresent([HTTPHeader].self, forKey: .httpHeaders) ?? []
+        reachabilityResults = try container.decodeIfPresent([PortReachability].self, forKey: .reachabilityResults) ?? []
         ipGeolocation = try container.decodeIfPresent(IPGeolocation.self, forKey: .ipGeolocation)
         emailSecurity = try container.decodeIfPresent(EmailSecurityResult.self, forKey: .emailSecurity)
         mtaSts = try container.decodeIfPresent(MTASTSResult.self, forKey: .mtaSts) ?? emailSecurity?.mtaSts
@@ -818,6 +917,18 @@ struct HistoryEntry: Identifiable, Codable {
         hstsPreloaded = try container.decodeIfPresent(Bool.self, forKey: .hstsPreloaded)
         availabilityResult = try container.decodeIfPresent(DomainAvailabilityResult.self, forKey: .availabilityResult)
         suggestions = try container.decodeIfPresent([DomainSuggestionResult].self, forKey: .suggestions) ?? []
+        appVersion = try container.decodeIfPresent(String.self, forKey: .appVersion) ?? "2.6.0"
+        resultSource = try container.decodeIfPresent(LookupResultSource.self, forKey: .resultSource) ?? .snapshot
+        dataSources = try container.decodeIfPresent([String].self, forKey: .dataSources) ?? []
+        provenanceBySection = try container.decodeIfPresent([LookupSectionKind: SectionProvenance].self, forKey: .provenanceBySection) ?? [:]
+        availabilityConfidence = try container.decodeIfPresent(ConfidenceLevel.self, forKey: .availabilityConfidence)
+        ownershipConfidence = try container.decodeIfPresent(ConfidenceLevel.self, forKey: .ownershipConfidence)
+        subdomainConfidence = try container.decodeIfPresent(ConfidenceLevel.self, forKey: .subdomainConfidence)
+        emailSecurityConfidence = try container.decodeIfPresent(ConfidenceLevel.self, forKey: .emailSecurityConfidence)
+        geolocationConfidence = try container.decodeIfPresent(ConfidenceLevel.self, forKey: .geolocationConfidence)
+        errorDetails = try container.decodeIfPresent([LookupSectionKind: InspectionFailure].self, forKey: .errorDetails) ?? [:]
+        validationIssues = try container.decodeIfPresent([String].self, forKey: .validationIssues) ?? HistoryEntry.defaultValidationIssues(domain: domain, timestamp: timestamp)
+        isPartialSnapshot = try container.decodeIfPresent(Bool.self, forKey: .isPartialSnapshot) ?? !validationIssues.isEmpty
         resolverDisplayName = try container.decodeIfPresent(String.self, forKey: .resolverDisplayName) ?? "Cloudflare"
         resolverURLString = try container.decodeIfPresent(String.self, forKey: .resolverURLString) ?? DNSResolverOption.defaultURLString
         totalLookupDurationMs = try container.decodeIfPresent(Int.self, forKey: .totalLookupDurationMs)
@@ -837,6 +948,17 @@ struct HistoryEntry: Identifiable, Codable {
         redirectChainError = try container.decodeIfPresent(String.self, forKey: .redirectChainError)
         subdomainsError = try container.decodeIfPresent(String.self, forKey: .subdomainsError)
         portScanError = try container.decodeIfPresent(String.self, forKey: .portScanError)
+    }
+
+    private static func defaultValidationIssues(domain: String, timestamp: Date) -> [String] {
+        var issues: [String] = []
+        if domain == "unknown-domain" {
+            issues.append("Missing domain in stored snapshot")
+        }
+        if timestamp == .distantPast {
+            issues.append("Missing collection timestamp in stored snapshot")
+        }
+        return issues
     }
 }
 

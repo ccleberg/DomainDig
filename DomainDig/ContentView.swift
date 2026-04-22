@@ -42,15 +42,20 @@ struct ContentView: View {
                     }
                     if viewModel.hasRun {
                         actionButtons
-                        if let statusMessage = resultStatusMessage {
+                        if !viewModel.resultsLoaded {
+                            LookupProgressOverviewView(steps: viewModel.activeLoadingLabels)
+                                .padding(.top, appDensity.metrics.cardSpacing)
+                        } else if let statusMessage = resultStatusMessage {
                             LookupStatusBannerView(message: statusMessage, resultSource: viewModel.currentResultSource)
                                 .padding(.top, appDensity.metrics.cardSpacing)
                         }
-                        SummaryView(fields: viewModel.summaryFields)
-                            .padding(.top, appDensity.metrics.cardSpacing)
-                        if let changeSummary = viewModel.currentChangeSummary {
-                            DomainChangeSummaryView(summary: changeSummary)
+                        if viewModel.resultsLoaded {
+                            SummaryView(fields: viewModel.summaryFields)
                                 .padding(.top, appDensity.metrics.cardSpacing)
+                            if let changeSummary = viewModel.currentChangeSummary {
+                                DomainChangeSummaryView(summary: changeSummary)
+                                    .padding(.top, appDensity.metrics.cardSpacing)
+                            }
                         }
                         DomainSectionView(
                             isCollapsed: sectionCollapsedBinding(.domain),
@@ -59,6 +64,9 @@ struct ContentView: View {
                             showSuggestions: viewModel.availabilityResult?.status == .registered || viewModel.suggestionsLoading,
                             availabilityLoading: viewModel.availabilityLoading,
                             suggestionsLoading: viewModel.suggestionsLoading,
+                            provenance: viewModel.currentSnapshot.provenanceBySection[.availability],
+                            confidence: viewModel.currentSnapshot.availabilityConfidence,
+                            snapshotNote: viewModel.currentSnapshot.note,
                             trackedDomain: viewModel.currentTrackedDomain,
                             trackingLimitMessage: viewModel.trackingLimitMessage,
                             onTrack: {
@@ -82,6 +90,8 @@ struct ContentView: View {
                             rows: viewModel.ownershipRows,
                             loading: viewModel.ownershipLoading,
                             error: viewModel.ownershipError,
+                            provenance: viewModel.currentSnapshot.provenanceBySection[.ownership],
+                            confidence: viewModel.currentSnapshot.ownershipConfidence,
                             showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .ownershipHistory)
                         )
                         .padding(.top, appDensity.metrics.sectionSpacing)
@@ -90,6 +100,8 @@ struct ContentView: View {
                             rows: viewModel.subdomainRows,
                             loading: viewModel.subdomainsLoading,
                             error: viewModel.subdomainsError,
+                            provenance: viewModel.currentSnapshot.provenanceBySection[.subdomains],
+                            confidence: viewModel.currentSnapshot.subdomainConfidence,
                             showsExtendedPlaceholder: !DataAccessService.hasAccess(to: .extendedSubdomains)
                         )
                         .padding(.top, appDensity.metrics.sectionSpacing)
@@ -97,6 +109,7 @@ struct ContentView: View {
                             DomainDiffView(
                                 title: "Latest Changes",
                                 sections: viewModel.currentDiffSections,
+                                contextNote: viewModel.currentChangeSummary?.contextNote,
                                 showsUnchanged: false
                             )
                             .padding(.top, appDensity.metrics.sectionSpacing)
@@ -107,6 +120,8 @@ struct ContentView: View {
                             sections: viewModel.dnsRows,
                             ptrMessage: viewModel.ptrMessage,
                             loading: viewModel.dnsLoading || viewModel.ptrLoading,
+                            dnsProvenance: viewModel.currentSnapshot.provenanceBySection[.dns],
+                            ptrProvenance: viewModel.currentSnapshot.provenanceBySection[.ptr],
                             sectionError: viewModel.dnsError
                         )
                         .padding(.top, appDensity.metrics.sectionSpacing)
@@ -116,13 +131,16 @@ struct ContentView: View {
                             sslInfo: viewModel.sslInfo,
                             sslLoading: viewModel.sslLoading || viewModel.hstsLoading,
                             sslError: viewModel.sslError,
+                            tlsProvenance: viewModel.currentSnapshot.provenanceBySection[.ssl],
                             responseRows: viewModel.webResponseRows,
                             headers: viewModel.httpHeaders,
                             headersLoading: viewModel.httpHeadersLoading,
                             headersError: viewModel.httpHeadersError,
+                            httpProvenance: viewModel.currentSnapshot.provenanceBySection[.httpHeaders],
                             redirects: viewModel.redirectRows,
                             redirectLoading: viewModel.redirectChainLoading,
                             redirectError: viewModel.redirectChainError,
+                            redirectProvenance: viewModel.currentSnapshot.provenanceBySection[.redirectChain],
                             finalURL: viewModel.currentSnapshot.redirectChain.last?.url
                         )
                         .padding(.top, appDensity.metrics.sectionSpacing)
@@ -130,6 +148,8 @@ struct ContentView: View {
                             isCollapsed: sectionCollapsedBinding(.email),
                             rows: viewModel.emailRows,
                             loading: viewModel.emailSecurityLoading,
+                            provenance: viewModel.currentSnapshot.provenanceBySection[.emailSecurity],
+                            confidence: viewModel.currentSnapshot.emailSecurityConfidence,
                             error: viewModel.emailSecurityError
                         )
                         .padding(.top, appDensity.metrics.sectionSpacing)
@@ -138,14 +158,18 @@ struct ContentView: View {
                             reachabilityRows: viewModel.reachabilityRows,
                             reachabilityLoading: viewModel.reachabilityLoading,
                             reachabilityError: viewModel.reachabilityError,
+                            reachabilityProvenance: viewModel.currentSnapshot.provenanceBySection[.reachability],
                             locationRows: viewModel.locationRows,
                             geolocation: viewModel.ipGeolocation,
                             geolocationLoading: viewModel.ipGeolocationLoading,
                             geolocationError: viewModel.ipGeolocationError,
+                            geolocationProvenance: viewModel.currentSnapshot.provenanceBySection[.ipGeolocation],
+                            geolocationConfidence: viewModel.currentSnapshot.geolocationConfidence,
                             standardPortRows: viewModel.standardPortRows,
                             customPortRows: viewModel.customPortRows,
                             portScanLoading: viewModel.portScanLoading,
                             portScanError: viewModel.portScanError,
+                            portScanProvenance: viewModel.currentSnapshot.provenanceBySection[.portScan],
                             customPortScanLoading: viewModel.customPortScanLoading,
                             customPortScanError: viewModel.customPortScanError,
                             isCloudflareProxied: viewModel.isCloudflareProxied,
@@ -160,27 +184,6 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 32)
-            }
-            .safeAreaInset(edge: .top) {
-                if viewModel.hasRun {
-                    StickyLookupSummaryView(
-                        domain: viewModel.searchedDomain,
-                        availability: viewModel.availabilityResult?.status,
-                        primaryIP: currentPrimaryIP,
-                        sslInfo: viewModel.sslInfo,
-                        sslError: viewModel.sslError,
-                        emailSecurity: viewModel.emailSecurity,
-                        emailError: viewModel.emailSecurityError,
-                        changeSummary: viewModel.currentChangeSummary
-                    )
-                    .padding(.horizontal)
-                    .padding(.top, 6)
-                    .background {
-                        Rectangle()
-                            .fill(.ultraThinMaterial)
-                            .opacity(0.96)
-                    }
-                }
             }
             .background(
                 LinearGradient(
@@ -521,11 +524,7 @@ struct ContentView: View {
     }
 
     private var defaultCollapsedSections: Set<ResultSection> {
-        var sections: Set<ResultSection> = []
-        if viewModel.standardPortRows.count + viewModel.customPortRows.count > 6 || currentPrimaryIP == nil {
-            sections.insert(.network)
-        }
-        return sections
+        []
     }
 
     private var currentPrimaryIP: String? {
@@ -636,6 +635,29 @@ struct StickyLookupSummaryView: View {
     }
 }
 
+struct LookupProgressOverviewView: View {
+    @Environment(\.appDensity) private var appDensity
+    let steps: [String]
+
+    var body: some View {
+        CardView(allowsHorizontalScroll: false) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Running lookup…")
+                        .font(appDensity.font(.caption))
+                        .foregroundStyle(.primary)
+                    Text(steps.isEmpty ? "Preparing requests" : steps.joined(separator: " • "))
+                        .font(appDensity.font(.caption2))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
+    }
+}
+
 struct LookupStatusBannerView: View {
     @Environment(\.appDensity) private var appDensity
     let message: String
@@ -686,6 +708,7 @@ struct LookupStatusBannerView: View {
 struct DomainChangeSummaryView: View {
     @Environment(\.appDensity) private var appDensity
     let summary: DomainChangeSummary
+    @State private var showsDetails = false
 
     var body: some View {
         CardView(allowsHorizontalScroll: false) {
@@ -706,9 +729,43 @@ struct DomainChangeSummaryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text(summary.message)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Inference")
+                    .font(appDensity.font(.caption2))
+                    .foregroundStyle(.secondary)
+                Text(summary.message)
+                    .font(appDensity.font(.caption))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+            }
+
+            if !summary.observedFacts.isEmpty || summary.contextNote != nil {
+                DisclosureGroup(showsDetails ? "Hide Details" : "Show Details", isExpanded: $showsDetails) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !summary.observedFacts.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Observed")
+                                    .font(appDensity.font(.caption2))
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(summary.observedFacts.enumerated()), id: \.offset) { _, fact in
+                                    Text(fact)
+                                        .font(appDensity.font(.caption))
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                        }
+
+                        if let contextNote = summary.contextNote {
+                            Text(contextNote)
+                                .font(appDensity.font(.caption2))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
                 .font(appDensity.font(.caption))
-                .foregroundStyle(.primary)
+                .tint(.secondary)
+            }
         }
     }
 
@@ -727,6 +784,7 @@ struct DomainChangeSummaryView: View {
 struct DomainDiffView: View {
     let title: String
     let sections: [DomainDiffSection]
+    let contextNote: String?
     let showsUnchanged: Bool
 
     @State private var collapsedSections = Set<UUID>()
@@ -765,6 +823,9 @@ struct DomainDiffView: View {
                     .buttonStyle(.bordered)
                     .font(.system(.caption, design: .monospaced))
                 }
+            }
+            if let contextNote {
+                MessageCardView(text: contextNote, isError: false)
             }
             if filteredSections.isEmpty {
                 MessageCardView(text: "No comparison data available", isError: false)
@@ -917,6 +978,9 @@ struct DomainSectionView: View {
     let showSuggestions: Bool
     let availabilityLoading: Bool
     let suggestionsLoading: Bool
+    let provenance: SectionProvenance?
+    let confidence: ConfidenceLevel?
+    let snapshotNote: String?
     let trackedDomain: TrackedDomain?
     let trackingLimitMessage: String?
     let onTrack: () -> Void
@@ -953,6 +1017,11 @@ struct DomainSectionView: View {
             }
         } content: {
             CardView(allowsHorizontalScroll: false) {
+                SectionTrustMetadataView(
+                    provenance: provenance,
+                    confidence: confidence,
+                    note: snapshotNote == nil ? nil : "Audit note present"
+                )
                 ForEach(rows) { row in
                     LabeledValueRow(row: row)
                 }
@@ -986,7 +1055,7 @@ struct DomainSectionView: View {
                                     .foregroundStyle(.primary)
                                     .textSelection(.enabled)
                                 Spacer()
-                                AppStatusBadgeView(model: AppStatusFactory.availability(suggestion.status == "Available" ? .available : .registered))
+                                AppStatusBadgeView(model: AppStatusFactory.availability(suggestion.availabilityStatus))
                             }
                         }
                     }
@@ -1001,11 +1070,14 @@ struct OwnershipSectionView: View {
     let rows: [InfoRowViewData]
     let loading: Bool
     let error: String?
+    let provenance: SectionProvenance?
+    let confidence: ConfidenceLevel?
     let showsHistoryPlaceholder: Bool
 
     var body: some View {
         CollapsibleSectionView(title: "Ownership", isCollapsed: $isCollapsed) {
             CardView(allowsHorizontalScroll: false) {
+                SectionTrustMetadataView(provenance: provenance, confidence: confidence)
                 if loading {
                     ProgressView("Fetching RDAP ownership…")
                         .appLoadingStyle()
@@ -1033,11 +1105,14 @@ struct SubdomainsSectionView: View {
     let rows: [SubdomainRowViewData]
     let loading: Bool
     let error: String?
+    let provenance: SectionProvenance?
+    let confidence: ConfidenceLevel?
     let showsExtendedPlaceholder: Bool
 
     var body: some View {
         CollapsibleSectionView(title: "Subdomains", isCollapsed: $isCollapsed, subtitle: "\(rows.count) found") {
             CardView(allowsHorizontalScroll: false) {
+                SectionTrustMetadataView(provenance: provenance, confidence: confidence)
                 if loading {
                     ProgressView("Checking certificate transparency…")
                         .appLoadingStyle()
@@ -1082,6 +1157,8 @@ struct DNSSectionView: View {
     let sections: [DNSRecordSectionViewData]
     let ptrMessage: SectionMessageViewData?
     let loading: Bool
+    let dnsProvenance: SectionProvenance?
+    let ptrProvenance: SectionProvenance?
     let sectionError: String?
 
     var body: some View {
@@ -1091,6 +1168,11 @@ struct DNSSectionView: View {
             } else if let sectionError, sections.isEmpty {
                 MessageCardView(text: sectionError, isError: true)
             } else {
+                if dnsProvenance != nil {
+                    CardView(allowsHorizontalScroll: false) {
+                        SectionTrustMetadataView(provenance: dnsProvenance, confidence: nil)
+                    }
+                }
                 ForEach(sections) { section in
                     CardView {
                         Text(section.title)
@@ -1124,6 +1206,7 @@ struct DNSSectionView: View {
                             .font(.system(.subheadline, design: .monospaced))
                             .fontWeight(.semibold)
                             .foregroundStyle(.cyan)
+                        SectionTrustMetadataView(provenance: ptrProvenance, confidence: nil)
                         MessageRowView(text: ptrMessage.text, isError: ptrMessage.isError)
                     }
                 }
@@ -1139,13 +1222,16 @@ struct WebSectionView: View {
     let sslInfo: SSLCertificateInfo?
     let sslLoading: Bool
     let sslError: String?
+    let tlsProvenance: SectionProvenance?
     let responseRows: [InfoRowViewData]
     let headers: [HTTPHeader]
     let headersLoading: Bool
     let headersError: String?
+    let httpProvenance: SectionProvenance?
     let redirects: [RedirectHopViewData]
     let redirectLoading: Bool
     let redirectError: String?
+    let redirectProvenance: SectionProvenance?
     let finalURL: String?
 
     var body: some View {
@@ -1158,6 +1244,7 @@ struct WebSectionView: View {
                     Spacer()
                     AppStatusBadgeView(model: AppStatusFactory.tls(sslInfo: sslInfo, error: sslError))
                 }
+                SectionTrustMetadataView(provenance: tlsProvenance, confidence: nil)
                 if sslLoading {
                     ProgressView("Checking certificate…")
                         .appLoadingStyle()
@@ -1188,6 +1275,7 @@ struct WebSectionView: View {
                 Text("Headers")
                     .font(appDensity.font(.subheadline, weight: .semibold))
                     .foregroundStyle(.cyan)
+                SectionTrustMetadataView(provenance: httpProvenance, confidence: nil)
                 if headersLoading {
                     ProgressView("Fetching headers…")
                         .appLoadingStyle()
@@ -1225,6 +1313,7 @@ struct WebSectionView: View {
                         AppCopyButton(value: finalURL, label: "Copy redirect URL")
                     }
                 }
+                SectionTrustMetadataView(provenance: redirectProvenance, confidence: nil)
                 if redirectLoading {
                     ProgressView("Tracing redirects…")
                         .appLoadingStyle()
@@ -1268,11 +1357,14 @@ struct EmailSectionView: View {
     @Binding var isCollapsed: Bool
     let rows: [EmailRowViewData]
     let loading: Bool
+    let provenance: SectionProvenance?
+    let confidence: ConfidenceLevel?
     let error: String?
 
     var body: some View {
         CollapsibleSectionView(title: "Email", isCollapsed: $isCollapsed) {
             CardView {
+                SectionTrustMetadataView(provenance: provenance, confidence: confidence)
                 HStack {
                     Spacer()
                     AppStatusBadgeView(model: AppStatusFactory.email(nil, error: error))
@@ -1331,14 +1423,18 @@ struct NetworkSectionView: View {
     let reachabilityRows: [ReachabilityRowViewData]
     let reachabilityLoading: Bool
     let reachabilityError: String?
+    let reachabilityProvenance: SectionProvenance?
     let locationRows: [InfoRowViewData]
     let geolocation: IPGeolocation?
     let geolocationLoading: Bool
     let geolocationError: String?
+    let geolocationProvenance: SectionProvenance?
+    let geolocationConfidence: ConfidenceLevel?
     let standardPortRows: [PortScanRowViewData]
     let customPortRows: [PortScanRowViewData]
     let portScanLoading: Bool
     let portScanError: String?
+    let portScanProvenance: SectionProvenance?
     let customPortScanLoading: Bool
     let customPortScanError: String?
     let isCloudflareProxied: Bool
@@ -1352,6 +1448,7 @@ struct NetworkSectionView: View {
                 Text("Reachability")
                     .font(appDensity.font(.subheadline, weight: .semibold))
                     .foregroundStyle(.cyan)
+                SectionTrustMetadataView(provenance: reachabilityProvenance, confidence: nil)
                 if reachabilityLoading {
                     ProgressView("Checking ports…")
                         .appLoadingStyle()
@@ -1376,6 +1473,7 @@ struct NetworkSectionView: View {
                 Text("Location")
                     .font(appDensity.font(.subheadline, weight: .semibold))
                     .foregroundStyle(.cyan)
+                SectionTrustMetadataView(provenance: geolocationProvenance, confidence: geolocationConfidence)
                 if geolocationLoading {
                     ProgressView("Looking up location…")
                         .appLoadingStyle()
@@ -1407,6 +1505,7 @@ struct NetworkSectionView: View {
                 Text("Port Scan")
                     .font(appDensity.font(.subheadline, weight: .semibold))
                     .foregroundStyle(.cyan)
+                SectionTrustMetadataView(provenance: portScanProvenance, confidence: nil)
 
                 if isCloudflareProxied {
                     Text("Domain is behind Cloudflare's proxy. Results reflect the edge, not the origin.")
@@ -1609,6 +1708,62 @@ struct MessageRowView: View {
     }
 }
 
+struct SectionTrustMetadataView: View {
+    @Environment(\.appDensity) private var appDensity
+    let provenance: SectionProvenance?
+    let confidence: ConfidenceLevel?
+    let note: String?
+
+    init(provenance: SectionProvenance?, confidence: ConfidenceLevel?, note: String? = nil) {
+        self.provenance = provenance
+        self.confidence = confidence
+        self.note = note
+    }
+
+    var body: some View {
+        if provenance != nil || confidence != nil || note != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    if let confidence {
+                        Text("Confidence \(confidence.title)")
+                            .font(appDensity.font(.caption2))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let provenance {
+                        Text(provenance.provider ?? provenance.source)
+                            .font(appDensity.font(.caption2))
+                            .foregroundStyle(.secondary)
+                        Text(provenance.resultSource.label)
+                            .font(appDensity.font(.caption2))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                DisclosureGroup("Details") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let provenance {
+                            LabeledValueRow(row: .init(label: "Method", value: provenance.source, tone: .secondary))
+                            if let provider = provenance.provider {
+                                LabeledValueRow(row: .init(label: "Provider", value: provider, tone: .secondary))
+                            }
+                            if let resolver = provenance.resolver {
+                                LabeledValueRow(row: .init(label: "Resolver", value: resolver, tone: .secondary))
+                            }
+                            LabeledValueRow(row: .init(label: "Collected", value: provenance.collectedAt.formatted(date: .abbreviated, time: .shortened), tone: .secondary))
+                            LabeledValueRow(row: .init(label: "Mode", value: provenance.resultSource.label, tone: .secondary))
+                        }
+                        if let note {
+                            LabeledValueRow(row: .init(label: "Note", value: note, tone: .secondary))
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+                .font(appDensity.font(.caption))
+                .tint(.secondary)
+            }
+        }
+    }
+}
+
 struct LabeledValueRow: View {
     @Environment(\.appDensity) private var appDensity
     let row: InfoRowViewData
@@ -1737,7 +1892,6 @@ private struct SettingsView: View {
             Section("About") {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Storage", value: "Local-only")
-                LabeledContent("Focus", value: "Readable domain inspection")
             }
         }
         .navigationTitle("Settings")
@@ -1776,7 +1930,7 @@ private struct SettingsView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.6.0"
+        AppVersion.current
     }
 }
 

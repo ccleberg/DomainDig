@@ -334,6 +334,7 @@ struct TrackedDomainDetailView: View {
 
     @State private var noteDraft = ""
     @State private var isEditingNote = false
+    @State private var showRerunOptions = false
 
     private var liveTrackedDomain: TrackedDomain {
         viewModel.trackedDomains.first(where: { $0.id == trackedDomain.id }) ?? trackedDomain
@@ -365,7 +366,7 @@ struct TrackedDomainDetailView: View {
                 }
 
                 Button {
-                    viewModel.rerunInspection(for: liveTrackedDomain)
+                    showRerunOptions = true
                 } label: {
                     Label("Re-run Inspection", systemImage: "magnifyingglass")
                 }
@@ -394,7 +395,14 @@ struct TrackedDomainDetailView: View {
 
             if !latestDiffSections.isEmpty {
                 Section("Latest Diff") {
-                    DomainDiffView(title: "Latest Snapshot vs Previous", sections: latestDiffSections, showsUnchanged: false)
+                    DomainDiffView(
+                        title: "Latest Snapshot vs Previous",
+                        sections: latestDiffSections,
+                        contextNote: latestSnapshots.count >= 2
+                            ? DomainDiffService.comparisonContextNote(from: latestSnapshots[1].snapshot, to: latestSnapshots[0].snapshot)
+                            : nil,
+                        showsUnchanged: false
+                    )
                 }
                 .listRowBackground(Color.clear)
             }
@@ -429,6 +437,19 @@ struct TrackedDomainDetailView: View {
         .preferredColorScheme(.dark)
         .onChange(of: viewModel.rerunNavigationToken) { _, _ in
             dismiss()
+        }
+        .confirmationDialog("Re-run inspection", isPresented: $showRerunOptions) {
+            Button("Run with Current Settings") {
+                viewModel.rerunInspection(for: liveTrackedDomain, useSnapshotResolver: false)
+            }
+            if latestSnapshots.first != nil {
+                Button("Run with Snapshot Resolver") {
+                    viewModel.rerunInspection(for: liveTrackedDomain, useSnapshotResolver: true)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(viewModel.resolverMismatchNote(for: liveTrackedDomain) ?? "Choose how to reproduce the most recent snapshot.")
         }
         .sheet(isPresented: $isEditingNote) {
             NavigationStack {

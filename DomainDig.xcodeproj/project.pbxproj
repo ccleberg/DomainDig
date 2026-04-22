@@ -134,7 +134,7 @@
 		};
 		8BF124FB2F70000100933221 /* DomainDigCLI */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8BBFF0292F987EF700E8E144 /* Build configuration list */;
+			buildConfigurationList = 8BBFF0292F987EF700E8E144 /* Build configuration list for PBXNativeTarget "DomainDigCLI" */;
 			buildPhases = (
 				8BF124FC2F70000100933221 /* Sources */,
 				8BF124FD2F70000100933221 /* Frameworks */,
@@ -354,7 +354,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_TEAM = ZCNAX3VL9D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -371,7 +371,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.6.0;
+				MARKETING_VERSION = 2.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = net.cleberg.DomainDig;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -390,7 +390,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 19;
+				CURRENT_PROJECT_VERSION = 20;
 				DEVELOPMENT_TEAM = ZCNAX3VL9D;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -407,7 +407,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.6.0;
+				MARKETING_VERSION = 2.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = net.cleberg.DomainDig;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -460,7 +460,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		8BBFF0292F987EF700E8E144 /* Build configuration list */ = {
+		8BBFF0292F987EF700E8E144 /* Build configuration list for PBXNativeTarget "DomainDigCLI" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				8BBFF0272F987E8700E8E144 /* Debug */,

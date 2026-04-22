@@ -20,6 +20,9 @@ struct DomainInspectionService {
         let resolverURLString = DNSLookupService.currentResolverURLString()
         var cachedSections = Set<LookupSectionKind>()
         var sectionSources: [LookupResultSource] = []
+        var provenanceBySection: [LookupSectionKind: SectionProvenance] = [:]
+        var dataSources = Set<String>()
+        var errorDetails: [LookupSectionKind: InspectionFailure] = [:]
 
         async let dnsFetch = runtime.dns(domain: normalizedDomain)
         async let availabilityFetch = runtime.availability(domain: normalizedDomain)
@@ -34,41 +37,129 @@ struct DomainInspectionService {
 
         let resolvedDNS = await dnsFetch
         let dnsResult = normalizeErrors(in: resolvedDNS.value)
-        track(.dns, source: resolvedDNS.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .dns,
+            source: resolvedDNS.source,
+            provenance: provenance(for: .dns, source: resolvedDNS.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .dns, result: dnsResult, into: &errorDetails)
 
         let availability = await availabilityFetch
-        track(.availability, source: availability.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .availability,
+            source: availability.source,
+            provenance: provenance(for: .availability, source: availability.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
 
         let resolvedSSL = await sslFetch
         let sslResult = normalizeErrors(in: resolvedSSL.value)
-        track(.ssl, source: resolvedSSL.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .ssl,
+            source: resolvedSSL.source,
+            provenance: provenance(for: .ssl, source: resolvedSSL.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .ssl, result: sslResult, into: &errorDetails)
 
         let hsts = await hstsFetch
-        track(.hsts, source: hsts.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .hsts,
+            source: hsts.source,
+            provenance: provenance(for: .hsts, source: hsts.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
 
         let http = await httpFetch
         let httpResult = normalizeErrors(in: http.value)
-        track(.httpHeaders, source: http.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .httpHeaders,
+            source: http.source,
+            provenance: provenance(for: .httpHeaders, source: http.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .httpHeaders, result: httpResult, into: &errorDetails)
 
         let reachability = await reachabilityFetch
         let reachabilityResult = normalizeErrors(in: reachability.value)
-        track(.reachability, source: reachability.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .reachability,
+            source: reachability.source,
+            provenance: provenance(for: .reachability, source: reachability.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .reachability, result: reachabilityResult, into: &errorDetails)
 
         let resolvedOwnership = await ownershipFetch
         let ownershipResult = normalizeErrors(in: resolvedOwnership.value)
-        track(.ownership, source: resolvedOwnership.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .ownership,
+            source: resolvedOwnership.source,
+            provenance: provenance(for: .ownership, source: resolvedOwnership.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .ownership, result: ownershipResult, into: &errorDetails)
 
         let redirects = await redirectFetch
         let redirectResult = normalizeErrors(in: redirects.value)
-        track(.redirectChain, source: redirects.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .redirectChain,
+            source: redirects.source,
+            provenance: provenance(for: .redirectChain, source: redirects.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .redirectChain, result: redirectResult, into: &errorDetails)
 
         let resolvedSubdomains = await subdomainFetch
         let subdomainResult = normalizeErrors(in: resolvedSubdomains.value)
-        track(.subdomains, source: resolvedSubdomains.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .subdomains,
+            source: resolvedSubdomains.source,
+            provenance: provenance(for: .subdomains, source: resolvedSubdomains.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .subdomains, result: subdomainResult, into: &errorDetails)
 
         let ports = await portScanFetch
         let portScanResult = normalizeErrors(in: ports.value)
-        track(.portScan, source: ports.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        track(
+            .portScan,
+            source: ports.source,
+            provenance: provenance(for: .portScan, source: ports.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .portScan, result: portScanResult, into: &errorDetails)
 
         let dnsSections = mapServiceResult(dnsResult, emptyValue: [])
         let sslInfo = mapOptionalValueServiceResult(sslResult)
@@ -92,12 +183,30 @@ struct DomainInspectionService {
         } else {
             emailOutcome = await runtime.email(domain: normalizedDomain, txtRecords: txtRecords)
         }
-        track(.emailSecurity, source: emailOutcome.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+        let normalizedEmailResult = normalizeErrors(in: emailOutcome.value)
+        track(
+            .emailSecurity,
+            source: emailOutcome.source,
+            provenance: provenance(for: .emailSecurity, source: emailOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        captureFailure(for: .emailSecurity, result: normalizedEmailResult, into: &errorDetails)
 
         let suggestionsOutcome: CachedLookupResult<[DomainSuggestionResult]>
         if availability.value.status == .registered {
             suggestionsOutcome = await runtime.suggestions(domain: normalizedDomain)
-            track(.suggestions, source: suggestionsOutcome.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+            track(
+                .suggestions,
+                source: suggestionsOutcome.source,
+                provenance: provenance(for: .suggestions, source: suggestionsOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+                cachedSections: &cachedSections,
+                sectionSources: &sectionSources,
+                provenanceBySection: &provenanceBySection,
+                dataSources: &dataSources
+            )
         } else {
             suggestionsOutcome = CachedLookupResult(value: [], source: .live)
         }
@@ -122,27 +231,65 @@ struct DomainInspectionService {
             }
 
             if let ptrOutcome {
-                track(.ptr, source: ptrOutcome.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+                let normalizedPTRResult = normalizeErrors(in: ptrOutcome.value)
+                track(
+                    .ptr,
+                    source: ptrOutcome.source,
+                    provenance: provenance(for: .ptr, source: ptrOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+                    cachedSections: &cachedSections,
+                    sectionSources: &sectionSources,
+                    provenanceBySection: &provenanceBySection,
+                    dataSources: &dataSources
+                )
+                captureFailure(for: .ptr, result: normalizedPTRResult, into: &errorDetails)
             }
             if let geoOutcome {
-                track(.ipGeolocation, source: geoOutcome.source, cachedSections: &cachedSections, sectionSources: &sectionSources)
+                let normalizedGeoResult = normalizeErrors(in: geoOutcome.value)
+                track(
+                    .ipGeolocation,
+                    source: geoOutcome.source,
+                    provenance: provenance(for: .ipGeolocation, source: geoOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+                    cachedSections: &cachedSections,
+                    sectionSources: &sectionSources,
+                    provenanceBySection: &provenanceBySection,
+                    dataSources: &dataSources
+                )
+                captureFailure(for: .ipGeolocation, result: normalizedGeoResult, into: &errorDetails)
             }
         } else {
             ptrOutcome = nil
             geoOutcome = nil
         }
 
-        let emailSecurity = mapOptionalValueServiceResult(normalizeErrors(in: emailOutcome.value))
+        let emailSecurity = mapOptionalValueServiceResult(normalizedEmailResult)
         let ptrRecord = mapOptionalServiceResult(ptrOutcome.map { normalizeErrors(in: $0.value) }, missingMessage: "No A record available")
         let geolocation = mapOptionalServiceResult(geoOutcome.map { normalizeErrors(in: $0.value) }, missingMessage: "No A record available")
+        let availabilityConfidence = confidenceForAvailability(result: availability.value, provenance: provenanceBySection[.availability])
+        let ownershipConfidence = confidenceForOwnership(result: ownership.value, error: ownership.message)
+        let subdomainConfidence = confidenceForSubdomains(results: subdomains.value, error: subdomains.message)
+        let emailConfidence = confidenceForEmail(result: emailSecurity.value, error: emailSecurity.message)
+        let geolocationConfidence = confidenceForGeolocation(result: geolocation.value, error: geolocation.message)
+        let validationIssues = validationIssues(for: normalizedDomain, snapshotTimestamp: startedAt, availability: availability.value, dnsSections: dnsSections.value, provenanceBySection: provenanceBySection)
 
         return LookupSnapshot(
             historyEntryID: nil,
             domain: availability.value.domain,
             timestamp: Date(),
             trackedDomainID: previousSnapshot?.trackedDomainID,
+            note: previousSnapshot?.note,
+            appVersion: AppVersion.current,
             resolverDisplayName: resolverDisplayName,
             resolverURLString: resolverURLString,
+            dataSources: Array(dataSources).sorted(),
+            provenanceBySection: provenanceBySection,
+            availabilityConfidence: availabilityConfidence,
+            ownershipConfidence: ownershipConfidence,
+            subdomainConfidence: subdomainConfidence,
+            emailSecurityConfidence: emailConfidence,
+            geolocationConfidence: geolocationConfidence,
+            errorDetails: errorDetails,
+            isPartialSnapshot: !validationIssues.isEmpty,
+            validationIssues: validationIssues,
             totalLookupDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000),
             dnsSections: dnsSections.value,
             dnsError: dnsSections.message,
@@ -193,12 +340,61 @@ struct DomainInspectionService {
     private func track(
         _ section: LookupSectionKind,
         source: LookupResultSource,
+        provenance: SectionProvenance,
         cachedSections: inout Set<LookupSectionKind>,
-        sectionSources: inout [LookupResultSource]
+        sectionSources: inout [LookupResultSource],
+        provenanceBySection: inout [LookupSectionKind: SectionProvenance],
+        dataSources: inout Set<String>
     ) {
         sectionSources.append(source)
+        provenanceBySection[section] = provenance
+        dataSources.insert(provenance.provider ?? provenance.source)
         if source != .live {
             cachedSections.insert(section)
+        }
+    }
+
+    private func provenance(
+        for section: LookupSectionKind,
+        source: LookupResultSource,
+        collectedAt: Date,
+        resolverDisplayName: String
+    ) -> SectionProvenance {
+        switch section {
+        case .dns, .ptr:
+            return SectionProvenance(
+                source: "DNS-over-HTTPS query",
+                collectedAt: collectedAt,
+                provider: "Selected DoH resolver",
+                resolver: resolverDisplayName,
+                resultSource: source
+            )
+        case .availability:
+            return SectionProvenance(
+                source: "RDAP lookup with DNS fallback",
+                collectedAt: collectedAt,
+                provider: "rdap.org / selected resolver",
+                resolver: resolverDisplayName,
+                resultSource: source
+            )
+        case .ssl:
+            return SectionProvenance(source: "Direct TLS handshake", collectedAt: collectedAt, provider: "Target host", resolver: nil, resultSource: source)
+        case .hsts, .httpHeaders, .redirectChain:
+            return SectionProvenance(source: "HTTP request", collectedAt: collectedAt, provider: "Target host", resolver: nil, resultSource: source)
+        case .reachability:
+            return SectionProvenance(source: "TCP reachability probe", collectedAt: collectedAt, provider: "Target host", resolver: nil, resultSource: source)
+        case .ipGeolocation:
+            return SectionProvenance(source: "IP geolocation lookup", collectedAt: collectedAt, provider: "ipapi.co", resolver: nil, resultSource: source)
+        case .emailSecurity:
+            return SectionProvenance(source: "DNS TXT inspection", collectedAt: collectedAt, provider: "Selected DoH resolver", resolver: resolverDisplayName, resultSource: source)
+        case .ownership:
+            return SectionProvenance(source: "RDAP domain lookup", collectedAt: collectedAt, provider: "rdap.org", resolver: nil, resultSource: source)
+        case .subdomains:
+            return SectionProvenance(source: "Certificate transparency search", collectedAt: collectedAt, provider: "crt.sh", resolver: nil, resultSource: source)
+        case .portScan:
+            return SectionProvenance(source: "TCP port scan", collectedAt: collectedAt, provider: "Target host", resolver: nil, resultSource: source)
+        case .suggestions:
+            return SectionProvenance(source: "Availability suggestions", collectedAt: collectedAt, provider: "DomainDig heuristic", resolver: resolverDisplayName, resultSource: source)
         }
     }
 
@@ -259,44 +455,131 @@ struct DomainInspectionService {
         case let .success(value):
             return .success(value)
         case let .empty(message):
-            return .empty(message)
+            return .empty(classifyFailure(from: message, defaultKind: .unavailable).message)
         case let .error(message):
-            return .error(classifiedMessage(from: message))
+            return .error(classifyFailure(from: message).message)
         }
     }
 
-    private func classifiedMessage(from message: String) -> String {
+    private func classifyFailure(from message: String, defaultKind: InspectionErrorKind = .unknown) -> InspectionFailure {
         let normalizedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowercasedMessage = normalizedMessage.lowercased()
-
-        if lowercasedMessage.hasPrefix("network error:")
-            || lowercasedMessage.hasPrefix("timeout:")
-            || lowercasedMessage.hasPrefix("rate limit:")
-            || lowercasedMessage.hasPrefix("parsing error:") {
-            return normalizedMessage
-        }
-
         if lowercasedMessage.contains("timed out") {
-            return "Timeout: Request timed out"
+            return InspectionFailure(kind: .timeout, message: "Timed out", details: normalizedMessage)
         }
         if lowercasedMessage.contains("429")
             || lowercasedMessage.contains("too many requests")
             || lowercasedMessage.contains("rate limit") {
-            return "Rate limit: Try again shortly"
+            return InspectionFailure(kind: .rateLimited, message: "Rate limited", details: normalizedMessage)
         }
         if lowercasedMessage.contains("cannot parse")
             || lowercasedMessage.contains("decoding")
             || lowercasedMessage.contains("json") {
-            return "Parsing error: Invalid server response"
+            return InspectionFailure(kind: .parsing, message: "Could not parse response", details: normalizedMessage)
         }
         if lowercasedMessage.contains("offline")
             || lowercasedMessage.contains("internet connection")
             || lowercasedMessage.contains("not connected")
             || lowercasedMessage.contains("network connection") {
-            return "Network error: Offline"
+            return InspectionFailure(kind: .network, message: "Network unavailable", details: normalizedMessage)
         }
+        if lowercasedMessage.contains("unsupported") {
+            return InspectionFailure(kind: .unsupported, message: "Unsupported for this target", details: normalizedMessage)
+        }
+        if lowercasedMessage == "unavailable" || lowercasedMessage.contains("no a record available") {
+            return InspectionFailure(kind: .unavailable, message: normalizedMessage, details: nil)
+        }
+        if defaultKind == .unavailable {
+            return InspectionFailure(kind: .unavailable, message: normalizedMessage, details: nil)
+        }
+        return InspectionFailure(kind: .unknown, message: normalizedMessage.isEmpty ? defaultKind.title : normalizedMessage, details: normalizedMessage)
+    }
 
-        return "Network error: \(normalizedMessage)"
+    private func captureFailure<Value>(
+        for section: LookupSectionKind,
+        result: ServiceResult<Value>,
+        into errorDetails: inout [LookupSectionKind: InspectionFailure]
+    ) {
+        switch result {
+        case .success:
+            return
+        case let .empty(message):
+            errorDetails[section] = classifyFailure(from: message, defaultKind: .unavailable)
+        case let .error(message):
+            errorDetails[section] = classifyFailure(from: message)
+        }
+    }
+
+    private func confidenceForAvailability(result: DomainAvailabilityResult, provenance: SectionProvenance?) -> ConfidenceLevel {
+        guard result.status != .unknown else { return .low }
+        if provenance?.provider?.localizedCaseInsensitiveContains("rdap.org") == true, result.status == .registered {
+            return .high
+        }
+        if result.status == .registered {
+            return .medium
+        }
+        return .low
+    }
+
+    private func confidenceForOwnership(result: DomainOwnership?, error: String?) -> ConfidenceLevel {
+        guard let result else { return error == nil ? .low : .low }
+        let hasDirectRegistrationData = result.registrar != nil || result.createdDate != nil || result.expirationDate != nil
+        return hasDirectRegistrationData ? .high : .medium
+    }
+
+    private func confidenceForSubdomains(results: [DiscoveredSubdomain], error: String?) -> ConfidenceLevel {
+        if !results.isEmpty {
+            return .medium
+        }
+        return error == nil ? .low : .low
+    }
+
+    private func confidenceForEmail(result: EmailSecurityResult?, error: String?) -> ConfidenceLevel {
+        guard let result else { return error == nil ? .low : .low }
+        let foundCount = [result.spf.found, result.dmarc.found, result.dkim.found, result.bimi.found, result.mtaSts?.txtFound == true]
+            .filter { $0 }
+            .count
+        if foundCount >= 3 {
+            return .high
+        }
+        if foundCount >= 1 {
+            return .medium
+        }
+        return .low
+    }
+
+    private func confidenceForGeolocation(result: IPGeolocation?, error: String?) -> ConfidenceLevel {
+        guard let result else { return error == nil ? .low : .low }
+        if result.city != nil && result.country_name != nil && result.latitude != nil && result.longitude != nil {
+            return .high
+        }
+        if result.country_name != nil || result.org != nil {
+            return .medium
+        }
+        return .low
+    }
+
+    private func validationIssues(
+        for domain: String,
+        snapshotTimestamp: Date,
+        availability: DomainAvailabilityResult,
+        dnsSections: [DNSSection],
+        provenanceBySection: [LookupSectionKind: SectionProvenance]
+    ) -> [String] {
+        var issues: [String] = []
+        if domain.isEmpty {
+            issues.append("Missing normalized domain")
+        }
+        if availability.domain.isEmpty {
+            issues.append("Missing normalized availability domain")
+        }
+        if dnsSections.isEmpty && provenanceBySection[.dns] == nil {
+            issues.append("Missing DNS provenance")
+        }
+        if snapshotTimestamp > Date().addingTimeInterval(5) {
+            issues.append("Snapshot timestamp is in the future")
+        }
+        return issues
     }
 
     private func mapServiceResult<Value>(_ result: ServiceResult<Value>, emptyValue: Value) -> (value: Value, message: String?) {
