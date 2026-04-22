@@ -115,6 +115,9 @@ struct BatchResultRowView: View {
             if result.changeSeverity == .medium || result.certificateWarningLevel == .warning {
                 return .yellow
             }
+            if result.quickStatus == "Changed" {
+                return .blue
+            }
             return .green
         case .failed:
             return .red

@@ -60,6 +60,20 @@ struct ContentView: View {
                             }
                         )
                             .padding(.top, 16)
+                        OwnershipSectionView(
+                            rows: viewModel.ownershipRows,
+                            loading: viewModel.ownershipLoading,
+                            error: viewModel.ownershipError,
+                            showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .ownershipHistory)
+                        )
+                        .padding(.top, 16)
+                        SubdomainsSectionView(
+                            rows: viewModel.subdomainRows,
+                            loading: viewModel.subdomainsLoading,
+                            error: viewModel.subdomainsError,
+                            showsExtendedPlaceholder: !DataAccessService.hasAccess(to: .extendedSubdomains)
+                        )
+                        .padding(.top, 16)
                         if !viewModel.currentDiffSections.isEmpty {
                             DomainDiffView(
                                 title: "Latest Changes",
@@ -765,6 +779,92 @@ struct DomainSectionView: View {
                                     .foregroundStyle(ResultColors.color(for: suggestion.tone))
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct OwnershipSectionView: View {
+    let rows: [InfoRowViewData]
+    let loading: Bool
+    let error: String?
+    let showsHistoryPlaceholder: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitleView(title: "Ownership")
+            CardView(allowsHorizontalScroll: false) {
+                if loading {
+                    ProgressView("Fetching RDAP ownership…")
+                        .appLoadingStyle()
+                } else {
+                    ForEach(rows) { row in
+                        LabeledValueRow(row: row)
+                    }
+                    if let error, rows.allSatisfy({ $0.value == "Unavailable" }) {
+                        MessageRowView(text: error, isError: error != "Unavailable")
+                            .padding(.top, 4)
+                    }
+                    if showsHistoryPlaceholder {
+                        MessageRowView(text: "Ownership history (coming soon)", isError: false)
+                            .padding(.top, 4)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct SubdomainsSectionView: View {
+    let rows: [SubdomainRowViewData]
+    let loading: Bool
+    let error: String?
+    let showsExtendedPlaceholder: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                SectionTitleView(title: "Subdomains")
+                Spacer()
+                Text("\(rows.count)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            CardView(allowsHorizontalScroll: false) {
+                if loading {
+                    ProgressView("Checking certificate transparency…")
+                        .appLoadingStyle()
+                } else if rows.isEmpty {
+                    MessageRowView(text: error ?? "No passive subdomains found", isError: false)
+                    if showsExtendedPlaceholder {
+                        MessageRowView(text: "Extended subdomain discovery (Data+)", isError: false)
+                            .padding(.top, 4)
+                    }
+                } else {
+                    ForEach(rows) { row in
+                        HStack(spacing: 8) {
+                            Text(row.hostname)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                            Spacer()
+                            if row.isInteresting {
+                                Text("Interesting")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.yellow)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.yellow.opacity(0.14))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    if showsExtendedPlaceholder {
+                        MessageRowView(text: "Extended subdomain discovery (Data+)", isError: false)
+                            .padding(.top, 4)
                     }
                 }
             }

@@ -147,6 +147,20 @@ struct HistoryDetailView: View {
                     onEditNote: nil
                 )
                     .padding(.top, 16)
+                OwnershipSectionView(
+                    rows: DomainViewModel.ownershipRows(from: snapshot),
+                    loading: false,
+                    error: snapshot.ownershipError,
+                    showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .ownershipHistory)
+                )
+                .padding(.top, 16)
+                SubdomainsSectionView(
+                    rows: DomainViewModel.subdomainRows(from: snapshot),
+                    loading: false,
+                    error: snapshot.subdomainsError,
+                    showsExtendedPlaceholder: !DataAccessService.hasAccess(to: .extendedSubdomains)
+                )
+                .padding(.top, 16)
                 if let comparisonSnapshot = viewModel.comparisonSnapshot(for: entry) {
                     if let changeSummary = entry.changeSummary {
                         DomainChangeSummaryView(summary: changeSummary)

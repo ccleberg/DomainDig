@@ -12,7 +12,10 @@ struct BatchSweepSummaryView: View {
         }
 
         return summary.results.filter {
-            ($0.changeSeverity ?? .low) >= .medium || $0.certificateWarningLevel != .none || $0.status == .failed
+            $0.quickStatus == "Changed" ||
+                $0.quickStatus == "High" ||
+                $0.certificateWarningLevel != .none ||
+                $0.status == .failed
         }
     }
 

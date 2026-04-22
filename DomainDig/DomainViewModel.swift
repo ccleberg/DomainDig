@@ -72,6 +72,18 @@ struct PortScanRowViewData: Identifiable {
     let durationLabel: String?
 }
 
+struct SubdomainRowViewData: Identifiable {
+    let id: String
+    let hostname: String
+    let isInteresting: Bool
+
+    init(hostname: String, isInteresting: Bool) {
+        self.id = hostname
+        self.hostname = hostname
+        self.isInteresting = isInteresting
+    }
+}
+
 struct DomainSuggestionViewData: Identifiable {
     let id: UUID
     let domain: String
@@ -107,10 +119,14 @@ struct LookupSnapshot {
     let ipGeolocationError: String?
     let emailSecurity: EmailSecurityResult?
     let emailSecurityError: String?
+    let ownership: DomainOwnership?
+    let ownershipError: String?
     let ptrRecord: String?
     let ptrError: String?
     let redirectChain: [RedirectHop]
     let redirectChainError: String?
+    let subdomains: [DiscoveredSubdomain]
+    let subdomainsError: String?
     let portScanResults: [PortScanResult]
     let portScanError: String?
     let changeSummary: DomainChangeSummary?
@@ -147,10 +163,14 @@ extension HistoryEntry {
             ipGeolocationError: ipGeolocationError,
             emailSecurity: emailSecurity,
             emailSecurityError: emailSecurityError,
+            ownership: ownership,
+            ownershipError: ownershipError,
             ptrRecord: ptrRecord,
             ptrError: ptrError,
             redirectChain: redirectChain,
             redirectChainError: redirectChainError,
+            subdomains: subdomains,
+            subdomainsError: subdomainsError,
             portScanResults: portScanResults,
             portScanError: portScanError,
             changeSummary: changeSummary,
@@ -204,6 +224,10 @@ final class DomainViewModel {
     var emailSecurityLoading = false
     var emailSecurityError: String?
 
+    var ownershipResult: DomainOwnership?
+    var ownershipLoading = false
+    var ownershipError: String?
+
     var ptrRecord: String?
     var ptrLoading = false
     var ptrError: String?
@@ -211,6 +235,10 @@ final class DomainViewModel {
     var redirectChain: [RedirectHop] = []
     var redirectChainLoading = false
     var redirectChainError: String?
+
+    var subdomains: [DiscoveredSubdomain] = []
+    var subdomainsLoading = false
+    var subdomainsError: String?
 
     var portScanResults: [PortScanResult] = []
     var portScanLoading = false
@@ -224,6 +252,7 @@ final class DomainViewModel {
     private(set) var lastLookupDurationMs: Int?
     private(set) var currentDiffSections: [DomainDiffSection] = []
     private(set) var currentChangeSummary: DomainChangeSummary?
+    private(set) var ownershipDiff: [DomainDiffItem] = []
     private(set) var refreshingTrackedDomainID: UUID?
     private(set) var rerunNavigationToken = UUID()
     private(set) var batchResults: [BatchLookupResult] = []
@@ -290,8 +319,10 @@ final class DomainViewModel {
             !reachabilityLoading &&
             !ipGeolocationLoading &&
             !emailSecurityLoading &&
+            !ownershipLoading &&
             !ptrLoading &&
             !redirectChainLoading &&
+            !subdomainsLoading &&
             !portScanLoading &&
             !customPortScanLoading
     }
@@ -438,10 +469,14 @@ final class DomainViewModel {
             ipGeolocationError: ipGeolocationError,
             emailSecurity: emailSecurity,
             emailSecurityError: emailSecurityError,
+            ownership: ownershipResult,
+            ownershipError: ownershipError,
             ptrRecord: ptrRecord,
             ptrError: ptrError,
             redirectChain: redirectChain,
             redirectChainError: redirectChainError,
+            subdomains: subdomains,
+            subdomainsError: subdomainsError,
             portScanResults: allPortScanResults,
             portScanError: combinedPortScanError,
             changeSummary: currentChangeSummary,
@@ -487,6 +522,14 @@ final class DomainViewModel {
 
     var emailRows: [EmailRowViewData] {
         Self.emailRows(from: currentSnapshot)
+    }
+
+    var ownershipRows: [InfoRowViewData] {
+        Self.ownershipRows(from: currentSnapshot)
+    }
+
+    var subdomainRows: [SubdomainRowViewData] {
+        Self.subdomainRows(from: currentSnapshot)
     }
 
     var reachabilityRows: [ReachabilityRowViewData] {
@@ -643,6 +686,7 @@ final class DomainViewModel {
         lastLookupDurationMs = nil
         currentDiffSections = []
         currentChangeSummary = nil
+        ownershipDiff = []
         refreshingTrackedDomainID = nil
         clearBatchState()
         clearLookupState()
@@ -791,6 +835,8 @@ final class DomainViewModel {
             group.addTask { await self.runAvailability(domain: domain, lookupID: lookupID) }
             group.addTask { await self.runSSL(domain: domain, lookupID: lookupID) }
             group.addTask { await self.runHSTSPreload(domain: domain, lookupID: lookupID) }
+            group.addTask { await self.runOwnership(domain: domain, lookupID: lookupID) }
+            group.addTask { await self.runSubdomains(domain: domain, lookupID: lookupID) }
         }
 
         await withTaskGroup(of: Void.self) { group in
@@ -946,6 +992,23 @@ final class DomainViewModel {
         emailSecurityLoading = false
     }
 
+    private func runOwnership(domain: String, lookupID: UUID) async {
+        let result = await DomainOwnershipService.lookup(domain: domain)
+        guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
+        switch result {
+        case let .success(ownership):
+            ownershipResult = ownership
+            ownershipError = nil
+        case let .empty(message):
+            ownershipResult = nil
+            ownershipError = message
+        case let .error(message):
+            ownershipResult = nil
+            ownershipError = message
+        }
+        ownershipLoading = false
+    }
+
     private func runReverseDNS(ip: String, lookupID: UUID) async {
         let result = await ReverseDNSService.lookup(ip: ip, resolverURLString: resolverURLString)
         guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
@@ -978,6 +1041,23 @@ final class DomainViewModel {
             redirectChainError = message
         }
         redirectChainLoading = false
+    }
+
+    private func runSubdomains(domain: String, lookupID: UUID) async {
+        let result = await SubdomainDiscoveryService.discover(for: domain)
+        guard !Task.isCancelled, isCurrentLookup(lookupID) else { return }
+        switch result {
+        case let .success(results):
+            subdomains = results
+            subdomainsError = nil
+        case let .empty(message):
+            subdomains = []
+            subdomainsError = message
+        case let .error(message):
+            subdomains = []
+            subdomainsError = message
+        }
+        subdomainsLoading = false
     }
 
     private func runPortScan(domain: String, lookupID: UUID) async {
@@ -1061,7 +1141,9 @@ final class DomainViewModel {
         async let hstsResult = SSLCheckService.checkHSTSPreload(domain: domain)
         async let httpResult = HTTPHeadersService.fetch(domain: domain)
         async let reachabilityResult = ReachabilityService.checkAll(domain: domain)
+        async let ownershipResult = DomainOwnershipService.lookup(domain: domain)
         async let redirectResult = RedirectChainService.trace(domain: domain)
+        async let subdomainResult = SubdomainDiscoveryService.discover(for: domain)
         async let portScanResult = PortScanService.scanAll(domain: domain)
 
         let resolvedDNS = await dnsResult
@@ -1070,7 +1152,9 @@ final class DomainViewModel {
         let hsts = await hstsResult
         let http = await httpResult
         let reachability = await reachabilityResult
+        let resolvedOwnership = await ownershipResult
         let redirects = await redirectResult
+        let resolvedSubdomains = await subdomainResult
         let ports = await portScanResult
 
         guard !Task.isCancelled else { return nil }
@@ -1187,6 +1271,17 @@ final class DomainViewModel {
             emailSecurityError = message
         }
 
+        let ownership: DomainOwnership?
+        let ownershipError: String?
+        switch resolvedOwnership {
+        case let .success(result):
+            ownership = result
+            ownershipError = nil
+        case let .empty(message), let .error(message):
+            ownership = nil
+            ownershipError = message
+        }
+
         let ptrRecord: String?
         let ptrError: String?
         switch resolvedPTR {
@@ -1213,6 +1308,17 @@ final class DomainViewModel {
         case .none:
             ipGeolocation = nil
             ipGeolocationError = "No A record available"
+        }
+
+        let subdomains: [DiscoveredSubdomain]
+        let subdomainsError: String?
+        switch resolvedSubdomains {
+        case let .success(result):
+            subdomains = result
+            subdomainsError = nil
+        case let .empty(message), let .error(message):
+            subdomains = []
+            subdomainsError = message
         }
 
         let snapshot = LookupSnapshot(
@@ -1243,10 +1349,14 @@ final class DomainViewModel {
             ipGeolocationError: ipGeolocationError,
             emailSecurity: emailSecurity,
             emailSecurityError: emailSecurityError,
+            ownership: ownership,
+            ownershipError: ownershipError,
             ptrRecord: ptrRecord,
             ptrError: ptrError,
             redirectChain: redirectChain,
             redirectChainError: redirectChainError,
+            subdomains: subdomains,
+            subdomainsError: subdomainsError,
             portScanResults: portScanResults,
             portScanError: portScanError,
             changeSummary: nil,
@@ -1303,6 +1413,7 @@ final class DomainViewModel {
         if updateCurrentState {
             currentChangeSummary = changeSummary
             currentDiffSections = diffSections
+            ownershipDiff = diffSections.first(where: { $0.title == "Ownership" })?.items.filter(\.hasChanges) ?? []
         }
 
         let entry = HistoryEntry(
@@ -1316,8 +1427,10 @@ final class DomainViewModel {
             ipGeolocation: snapshot.ipGeolocation,
             emailSecurity: snapshot.emailSecurity,
             mtaSts: snapshot.emailSecurity?.mtaSts,
+            ownership: snapshot.ownership,
             ptrRecord: snapshot.ptrRecord,
             redirectChain: snapshot.redirectChain,
+            subdomains: snapshot.subdomains,
             portScanResults: snapshot.portScanResults,
             hstsPreloaded: snapshot.hstsPreloaded,
             availabilityResult: snapshot.availabilityResult,
@@ -1336,8 +1449,10 @@ final class DomainViewModel {
             reachabilityError: snapshot.reachabilityError,
             ipGeolocationError: snapshot.ipGeolocationError,
             emailSecurityError: snapshot.emailSecurityError,
+            ownershipError: snapshot.ownershipError,
             ptrError: snapshot.ptrError,
             redirectChainError: snapshot.redirectChainError,
+            subdomainsError: snapshot.subdomainsError,
             portScanError: snapshot.portScanError
         )
 
@@ -1520,6 +1635,7 @@ final class DomainViewModel {
         hasRun = true
         currentDiffSections = []
         currentChangeSummary = nil
+        ownershipDiff = []
         clearLookupState()
         setAllLoadingStates(true)
         customPortScanLoading = false
@@ -1677,8 +1793,8 @@ final class DomainViewModel {
         let summary = BatchSweepSummary(
             source: source,
             totalDomains: batchResults.count,
-            changedDomains: batchResults.filter { ($0.changeSeverity ?? .low) >= .medium }.count,
-            unchangedDomains: batchResults.filter { ($0.changeSeverity ?? .low) < .medium && $0.certificateWarningLevel == .none && $0.status == .completed }.count,
+            changedDomains: batchResults.filter { $0.quickStatus == "Changed" || $0.quickStatus == "High" }.count,
+            unchangedDomains: batchResults.filter { $0.quickStatus == "Unchanged" && $0.status == .completed }.count,
             warningDomains: batchResults.filter { $0.certificateWarningLevel != .none }.count,
             results: batchResults.sorted { lhs, rhs in
                 if lhs.status != rhs.status {
@@ -1754,12 +1870,18 @@ final class DomainViewModel {
         emailSecurity = nil
         emailSecurityError = nil
         emailSecurityLoading = false
+        ownershipResult = nil
+        ownershipError = nil
+        ownershipLoading = false
         ptrRecord = nil
         ptrError = nil
         ptrLoading = false
         redirectChain = []
         redirectChainError = nil
         redirectChainLoading = false
+        subdomains = []
+        subdomainsError = nil
+        subdomainsLoading = false
         portScanResults = []
         portScanError = nil
         portScanLoading = false
@@ -1778,8 +1900,10 @@ final class DomainViewModel {
         reachabilityLoading = loading
         ipGeolocationLoading = loading
         emailSecurityLoading = loading
+        ownershipLoading = loading
         ptrLoading = loading
         redirectChainLoading = loading
+        subdomainsLoading = loading
         portScanLoading = loading
     }
 
@@ -1872,10 +1996,14 @@ final class DomainViewModel {
             ipGeolocationError: nil,
             emailSecurity: nil,
             emailSecurityError: nil,
+            ownership: nil,
+            ownershipError: nil,
             ptrRecord: nil,
             ptrError: nil,
             redirectChain: [],
             redirectChainError: nil,
+            subdomains: [],
+            subdomainsError: nil,
             portScanResults: [],
             portScanError: nil,
             changeSummary: trackedDomain.lastChangeSummary,
@@ -2100,6 +2228,28 @@ final class DomainViewModel {
         ]
     }
 
+    static func ownershipRows(from snapshot: LookupSnapshot) -> [InfoRowViewData] {
+        let ownership = snapshot.ownership
+
+        return [
+            InfoRowViewData(label: "Registrar", value: ownership?.registrar ?? "Unavailable", tone: ownership?.registrar == nil ? .secondary : .primary),
+            InfoRowViewData(label: "Registered", value: ownership?.createdDate.map(ownershipDateFormatter.string(from:)) ?? "Unavailable", tone: ownership?.createdDate == nil ? .secondary : .primary),
+            InfoRowViewData(label: "Expires", value: ownership?.expirationDate.map(ownershipDateFormatter.string(from:)) ?? "Unavailable", tone: ownership?.expirationDate == nil ? .secondary : .primary),
+            InfoRowViewData(label: "Status", value: ownership?.status.nilIfEmpty?.joined(separator: ", ") ?? "Unavailable", tone: ownership?.status.isEmpty == false ? .primary : .secondary),
+            InfoRowViewData(label: "Nameservers", value: ownership?.nameservers.nilIfEmpty?.joined(separator: ", ") ?? "Unavailable", tone: ownership?.nameservers.isEmpty == false ? .primary : .secondary),
+            InfoRowViewData(label: "Abuse Contact", value: ownership?.abuseEmail ?? "Unavailable", tone: ownership?.abuseEmail == nil ? .secondary : .primary)
+        ]
+    }
+
+    static func subdomainRows(from snapshot: LookupSnapshot) -> [SubdomainRowViewData] {
+        snapshot.subdomains.map { subdomain in
+            SubdomainRowViewData(
+                hostname: subdomain.hostname,
+                isInteresting: isInterestingSubdomain(subdomain.hostname)
+            )
+        }
+    }
+
     static func reachabilityRows(from snapshot: LookupSnapshot) -> [ReachabilityRowViewData] {
         snapshot.reachabilityResults.map {
             ReachabilityRowViewData(
@@ -2179,6 +2329,12 @@ final class DomainViewModel {
             "tls_status",
             "http_status_grade",
             "email_security_summary",
+            "registrar",
+            "ownership_expires",
+            "ownership_status",
+            "ownership_nameservers",
+            "subdomain_count",
+            "subdomains",
             "last_updated"
         ]
 
@@ -2191,6 +2347,12 @@ final class DomainViewModel {
                 httpsSummary(from: snapshot),
                 httpStatusGradeSummary(from: snapshot),
                 emailSummary(from: snapshot),
+                snapshot.ownership?.registrar ?? "",
+                snapshot.ownership?.expirationDate.map(csvDateFormatter.string(from:)) ?? "",
+                snapshot.ownership?.status.joined(separator: " | ") ?? "",
+                snapshot.ownership?.nameservers.joined(separator: " | ") ?? "",
+                "\(snapshot.subdomains.count)",
+                snapshot.subdomains.map(\.hostname).joined(separator: " | "),
                 csvDateFormatter.string(from: snapshot.timestamp)
             ]
         }
@@ -2279,6 +2441,33 @@ final class DomainViewModel {
                 for suggestion in snapshot.suggestions {
                     lines.append("    \(suggestion.domain): \(availabilityLabel(suggestion.status))")
                 }
+            }
+        }
+
+        appendSection("Ownership") {
+            for row in ownershipRows(from: snapshot) {
+                lines.append("  \(row.label): \(row.value)")
+            }
+            if let ownershipError = snapshot.ownershipError, snapshot.ownership == nil {
+                lines.append("  Source: \(ownershipError)")
+            }
+            if !DataAccessService.hasAccess(to: .ownershipHistory) {
+                lines.append("  Ownership history (coming soon)")
+            }
+        }
+
+        appendSection("Subdomains") {
+            lines.append("  Count: \(snapshot.subdomains.count)")
+            if snapshot.subdomains.isEmpty {
+                lines.append("  \(snapshot.subdomainsError ?? "No passive subdomains found")")
+            } else {
+                for subdomain in subdomainRows(from: snapshot) {
+                    let marker = subdomain.isInteresting ? " [interesting]" : ""
+                    lines.append("  \(subdomain.hostname)\(marker)")
+                }
+            }
+            if !DataAccessService.hasAccess(to: .extendedSubdomains) {
+                lines.append("  Extended subdomain discovery (Data+)")
             }
         }
 
@@ -2544,6 +2733,13 @@ final class DomainViewModel {
         return formatter
     }()
 
+    private static let ownershipDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
     private static let csvDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -2554,6 +2750,14 @@ final class DomainViewModel {
         let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
         return "\"\(escaped)\""
     }
+
+    private static func isInterestingSubdomain(_ hostname: String) -> Bool {
+        let keywords = ["admin", "api", "dev", "staging", "test", "internal"]
+        let labels = hostname.lowercased().split(separator: ".").map(String.init)
+        return labels.contains { label in
+            keywords.contains(where: { label.contains($0) })
+        }
+    }
 }
 
 private extension String {
@@ -2562,6 +2766,12 @@ private extension String {
     }
 
     var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
+private extension Array where Element == String {
+    var nilIfEmpty: [String]? {
         isEmpty ? nil : self
     }
 }

@@ -43,11 +43,13 @@ enum DomainDiffService {
         [
             availabilitySection(from: oldSnapshot, to: newSnapshot),
             primaryIPSection(from: oldSnapshot, to: newSnapshot),
+            ownershipSection(from: oldSnapshot, to: newSnapshot),
             dnsSection(from: oldSnapshot, to: newSnapshot),
             redirectSection(from: oldSnapshot, to: newSnapshot),
             tlsSection(from: oldSnapshot, to: newSnapshot),
             httpSection(from: oldSnapshot, to: newSnapshot),
-            emailSection(from: oldSnapshot, to: newSnapshot)
+            emailSection(from: oldSnapshot, to: newSnapshot),
+            subdomainSection(from: oldSnapshot, to: newSnapshot)
         ]
         .filter { !$0.items.isEmpty }
     }
@@ -58,19 +60,16 @@ enum DomainDiffService {
         generatedAt: Date = Date()
     ) -> DomainChangeSummary {
         let sections = diff(from: oldSnapshot, to: newSnapshot)
-        let meaningfulItems = sections
-            .flatMap(\.items)
-            .filter(\.isMeaningful)
         let allChangedItems = sections
             .flatMap(\.items)
             .filter(\.hasChanges)
 
-        let highlights = summaryHighlights(from: meaningfulItems)
-        let severity = meaningfulItems.map(\.severity).max() ?? (allChangedItems.isEmpty ? .low : .low)
-        let message = summaryMessage(from: meaningfulItems, highlights: highlights)
+        let highlights = summaryHighlights(from: allChangedItems)
+        let severity = allChangedItems.map(\.severity).max() ?? .low
+        let message = summaryMessage(from: allChangedItems, highlights: highlights)
 
         return DomainChangeSummary(
-            hasChanges: !meaningfulItems.isEmpty,
+            hasChanges: !allChangedItems.isEmpty,
             changedSections: highlights,
             message: message,
             severity: severity,
@@ -150,6 +149,50 @@ enum DomainDiffService {
         }
 
         return DomainDiffSection(title: "DNS", items: items)
+    }
+
+    private static func ownershipSection(from oldSnapshot: LookupSnapshot, to newSnapshot: LookupSnapshot) -> DomainDiffSection {
+        DomainDiffSection(
+            title: "Ownership",
+            items: [
+                compare(
+                    label: "Registrar",
+                    oldValue: normalized(oldSnapshot.ownership?.registrar),
+                    newValue: normalized(newSnapshot.ownership?.registrar),
+                    severity: .high
+                ),
+                compare(
+                    label: "Registration Date",
+                    oldValue: ownershipDateLabel(oldSnapshot.ownership?.createdDate),
+                    newValue: ownershipDateLabel(newSnapshot.ownership?.createdDate),
+                    severity: .low
+                ),
+                compare(
+                    label: "Expiration Date",
+                    oldValue: ownershipDateLabel(oldSnapshot.ownership?.expirationDate),
+                    newValue: ownershipDateLabel(newSnapshot.ownership?.expirationDate),
+                    severity: .low
+                ),
+                compare(
+                    label: "Ownership Status",
+                    oldValue: ownershipList(oldSnapshot.ownership?.status),
+                    newValue: ownershipList(newSnapshot.ownership?.status),
+                    severity: .low
+                ),
+                compare(
+                    label: "Nameservers",
+                    oldValue: ownershipList(oldSnapshot.ownership?.nameservers),
+                    newValue: ownershipList(newSnapshot.ownership?.nameservers),
+                    severity: .medium
+                ),
+                compare(
+                    label: "Abuse Contact",
+                    oldValue: normalized(oldSnapshot.ownership?.abuseEmail),
+                    newValue: normalized(newSnapshot.ownership?.abuseEmail),
+                    severity: .low
+                )
+            ].compactMap { $0 }
+        )
     }
 
     private static func redirectSection(from oldSnapshot: LookupSnapshot, to newSnapshot: LookupSnapshot) -> DomainDiffSection {
@@ -252,6 +295,20 @@ enum DomainDiffService {
         )
     }
 
+    private static func subdomainSection(from oldSnapshot: LookupSnapshot, to newSnapshot: LookupSnapshot) -> DomainDiffSection {
+        DomainDiffSection(
+            title: "Subdomains",
+            items: [
+                compare(
+                    label: "Passive Subdomains",
+                    oldValue: subdomainList(from: oldSnapshot),
+                    newValue: subdomainList(from: newSnapshot),
+                    severity: .low
+                )
+            ].compactMap { $0 }
+        )
+    }
+
     private static func compare(
         label: String,
         oldValue: String?,
@@ -306,6 +363,13 @@ enum DomainDiffService {
         if labels.contains("Redirect Target") {
             highlights.append("Redirect target changed")
         }
+        if labels.contains("Registrar") {
+            highlights.append("Registrar changed")
+        } else if labels.contains("Nameservers") {
+            highlights.append("Nameservers changed")
+        } else if labels.contains("Expiration Date") || labels.contains("Registration Date") || labels.contains("Ownership Status") || labels.contains("Abuse Contact") {
+            highlights.append("Ownership metadata changed")
+        }
         if let certificateItem = items.first(where: { $0.label == "Certificate Warning" }),
            let message = certificateItem.newValue {
             highlights.append(message)
@@ -322,6 +386,9 @@ enum DomainDiffService {
         }
         if labels.contains("Email Security") {
             highlights.append("Email security changed")
+        }
+        if labels.contains("Passive Subdomains") {
+            highlights.append("Subdomains changed")
         }
 
         var deduplicated: [String] = []
@@ -380,6 +447,10 @@ enum DomainDiffService {
         return "\(sslInfo.validUntil.formatted(date: .abbreviated, time: .omitted)) (\(sslInfo.daysUntilExpiry)d)"
     }
 
+    private static func ownershipDateLabel(_ date: Date?) -> String? {
+        date?.formatted(date: .abbreviated, time: .omitted)
+    }
+
     private static func httpStatusSummary(from snapshot: LookupSnapshot) -> String? {
         if let httpStatusCode = snapshot.httpStatusCode {
             return "\(httpStatusCode)"
@@ -422,5 +493,22 @@ enum DomainDiffService {
             .map { "\($0.name.lowercased()):\($0.value.trimmingCharacters(in: .whitespacesAndNewlines))" }
             .sorted()
         return headers.isEmpty ? nil : headers.joined(separator: "|")
+    }
+
+    private static func ownershipList(_ values: [String]?) -> String? {
+        guard let values else { return nil }
+        let normalizedValues = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .sorted()
+        return normalizedValues.isEmpty ? nil : normalizedValues.joined(separator: ",")
+    }
+
+    private static func subdomainList(from snapshot: LookupSnapshot) -> String? {
+        let values = snapshot.subdomains
+            .map(\.hostname)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .sorted()
+        return values.isEmpty ? nil : values.joined(separator: ",")
     }
 }

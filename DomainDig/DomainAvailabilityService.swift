@@ -35,32 +35,11 @@ struct DomainAvailabilityService {
     }
 
     private static func checkViaRDAP(domain: String) async -> DomainAvailabilityStatus? {
-        guard let url = URL(string: "https://rdap.org/domain/\(domain)") else {
-            return nil
+        let status = await RDAPService.registrationStatus(for: domain)
+        if status == nil {
+            debugLog("rdap-not-found", domain: domain, details: "Ignoring unavailable response from rdap.org")
         }
-
-        do {
-            var request = URLRequest(url: url, timeoutInterval: 8)
-            request.setValue("application/rdap+json, application/json", forHTTPHeaderField: "Accept")
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return nil
-            }
-
-            switch httpResponse.statusCode {
-            case 200:
-                return isValidRDAPDomainResponse(data) ? .registered : nil
-            case 404:
-                debugLog("rdap-not-found", domain: domain, details: "Ignoring not-found response from rdap.org")
-                return nil
-            default:
-                return nil
-            }
-        } catch {
-            debugLog("rdap-error", domain: domain, details: error.localizedDescription)
-            return nil
-        }
+        return status
     }
 
     private static func checkViaDNSFallback(domain: String) async -> DomainAvailabilityStatus {
@@ -83,28 +62,6 @@ struct DomainAvailabilityService {
             debugLog("dns-ns-error", domain: domain, details: error.localizedDescription)
             return .unknown
         }
-    }
-
-    private static func isValidRDAPDomainResponse(_ data: Data) -> Bool {
-        guard
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return false
-        }
-
-        if object["ldhName"] as? String != nil {
-            return true
-        }
-
-        if object["objectClassName"] as? String == "domain" {
-            return true
-        }
-
-        if object["handle"] as? String != nil, object["unicodeName"] as? String != nil {
-            return true
-        }
-
-        return false
     }
 
     private static func suggestionCandidates(for domain: String, limit: Int) -> [String] {
