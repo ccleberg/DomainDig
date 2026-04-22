@@ -2,8 +2,11 @@ import SwiftUI
 
 struct RootTabView: View {
     @Bindable var viewModel: DomainViewModel
+    @State private var purchaseService = PurchaseService.shared
 
     var body: some View {
+        let _ = purchaseService.currentTier
+
         TabView {
             ContentView(viewModel: viewModel)
                 .tabItem {
@@ -37,6 +40,28 @@ struct RootTabView: View {
             .tabItem {
                 Label("Settings", systemImage: "gearshape")
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.isPaywallPresented },
+            set: { viewModel.isPaywallPresented = $0 }
+        )) {
+            PaywallView()
+        }
+        .alert(item: Binding(
+            get: { viewModel.upgradePrompt },
+            set: { viewModel.upgradePrompt = $0 }
+        )) { prompt in
+            Alert(
+                title: Text(prompt.title),
+                message: Text(prompt.message),
+                primaryButton: .default(Text("Open Paywall")) {
+                    viewModel.upgradePrompt = nil
+                    viewModel.isPaywallPresented = true
+                },
+                secondaryButton: .cancel(Text("Continue")) {
+                    viewModel.upgradePrompt = nil
+                }
+            )
         }
     }
 }

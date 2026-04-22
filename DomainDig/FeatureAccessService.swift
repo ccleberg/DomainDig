@@ -64,34 +64,45 @@ struct FeatureEntitlements: Equatable {
     let batchSizeLimit: Int?
 }
 
+struct UpgradePromptContext: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let capability: FeatureCapability
+}
+
 enum FeatureAccessService {
-    static let currentTier: FeatureTier = .free
+    private static let effectivelyUnlimitedTrackedDomains = 5_000
+
+    static var currentTier: FeatureTier {
+        PurchaseService.cachedTier
+    }
 
     static var entitlements: FeatureEntitlements {
         switch currentTier {
         case .free:
             return FeatureEntitlements(
                 tier: .free,
-                capabilities: [.singleLookup, .basicHistory, .limitedTracking],
-                trackedDomainLimit: 3,
-                workflowLimit: 0,
-                batchSizeLimit: 0
+                capabilities: [.singleLookup, .basicHistory, .limitedTracking, .workflows, .batchOperations],
+                trackedDomainLimit: 5,
+                workflowLimit: 1,
+                batchSizeLimit: 10
             )
         case .pro:
             return FeatureEntitlements(
                 tier: .pro,
                 capabilities: [.singleLookup, .basicHistory, .limitedTracking, .workflows, .batchOperations, .advancedExports],
-                trackedDomainLimit: 250,
-                workflowLimit: 50,
-                batchSizeLimit: 100
+                trackedDomainLimit: effectivelyUnlimitedTrackedDomains,
+                workflowLimit: nil,
+                batchSizeLimit: nil
             )
         case .dataPlus:
             return FeatureEntitlements(
                 tier: .dataPlus,
                 capabilities: Set(FeatureCapability.allCases),
-                trackedDomainLimit: 1_000,
-                workflowLimit: 200,
-                batchSizeLimit: 250
+                trackedDomainLimit: effectivelyUnlimitedTrackedDomains,
+                workflowLimit: nil,
+                batchSizeLimit: nil
             )
         }
     }
@@ -106,9 +117,10 @@ enum FeatureAccessService {
 
     static func trackedDomainLimitMessage(currentCount: Int) -> String? {
         guard currentTier == .free else { return nil }
-        return currentCount >= entitlements.trackedDomainLimit
-            ? "Free includes up to \(entitlements.trackedDomainLimit) tracked domains."
-            : "Free includes up to \(entitlements.trackedDomainLimit) tracked domains."
+        if currentCount >= entitlements.trackedDomainLimit {
+            return "Free includes up to \(entitlements.trackedDomainLimit) tracked domains. Available in Pro."
+        }
+        return "Free includes up to \(entitlements.trackedDomainLimit) tracked domains."
     }
 
     static func canCreateWorkflow(currentCount: Int) -> Bool {
@@ -137,19 +149,61 @@ enum FeatureAccessService {
     }
 
     static func workflowLimitMessage(currentCount: Int) -> String? {
-        guard hasAccess(to: .workflows) else {
-            return upgradeMessage(for: .workflows)
-        }
         guard let limit = entitlements.workflowLimit, currentCount >= limit else { return nil }
-        return "Workflow limit reached."
+        return "Free includes up to \(limit) workflow."
     }
 
     static func batchLimitMessage(domainCount: Int) -> String? {
-        guard hasAccess(to: .batchOperations) else {
-            return upgradeMessage(for: .batchOperations)
-        }
         guard let limit = entitlements.batchSizeLimit, domainCount > limit else { return nil }
-        return "Batch limit is \(limit) domains on \(currentTier.title)."
+        return "Free runs batches up to \(limit) domains."
+    }
+
+    static func workflowAllowanceSummary(currentCount: Int) -> String? {
+        guard currentTier == .free, let limit = entitlements.workflowLimit else { return nil }
+        if currentCount >= limit {
+            return "Free includes up to \(limit) workflow. Available in Pro."
+        }
+        return "Free includes up to \(limit) workflow."
+    }
+
+    static func batchAllowanceSummary() -> String? {
+        guard currentTier == .free, let limit = entitlements.batchSizeLimit else { return nil }
+        return "Free runs batches up to \(limit) domains."
+    }
+
+    static func upgradePromptForTrackedDomains(currentCount: Int) -> UpgradePromptContext? {
+        guard currentCount >= entitlements.trackedDomainLimit else { return nil }
+        return UpgradePromptContext(
+            title: "Available in Pro",
+            message: "Free includes up to \(entitlements.trackedDomainLimit) tracked domains. You can keep your current watchlist, but adding more requires Pro.",
+            capability: .limitedTracking
+        )
+    }
+
+    static func upgradePromptForWorkflows(currentCount: Int) -> UpgradePromptContext? {
+        guard let limit = entitlements.workflowLimit, currentCount >= limit else { return nil }
+        return UpgradePromptContext(
+            title: "Available in Pro",
+            message: "Free includes up to \(limit) workflow. You can keep your current workflows, but creating more requires Pro.",
+            capability: .workflows
+        )
+    }
+
+    static func upgradePromptForBatch(domainCount: Int) -> UpgradePromptContext? {
+        guard let limit = entitlements.batchSizeLimit, domainCount > limit else { return nil }
+        return UpgradePromptContext(
+            title: "Available in Pro",
+            message: "Free runs batches up to \(limit) domains at a time. You can continue with smaller batches or upgrade to Pro.",
+            capability: .batchOperations
+        )
+    }
+
+    static func upgradePrompt(for capability: FeatureCapability) -> UpgradePromptContext {
+        UpgradePromptContext(
+            title: "Available in Pro",
+            message: upgradeMessage(for: capability),
+            capability: capability
+        )
     }
 
     static func enabledFeatureLabels() -> [String] {

@@ -25,20 +25,21 @@ private struct WorkflowNavigationTarget: Hashable {
 struct ContentView: View {
     @Environment(\.appDensity) private var appDensity
     @Bindable var viewModel: DomainViewModel
+    @State private var purchaseService = PurchaseService.shared
     @State private var navigationPath = NavigationPath()
     @FocusState private var domainFieldFocused: Bool
     @State private var customPortInput = ""
     @State private var customPortsExpanded = false
     @State private var trackingNoteDraft = ""
     @State private var editingTrackedDomain: TrackedDomain?
-    @State private var showTrackLimitAlert = false
-    @State private var featureGateMessage: String?
     @State private var inputMode: LookupInputMode = .single
     @State private var collapsedSections: Set<ResultSection> = [.network]
     @State private var showingCurrentDomainWorkflowSheet = false
     @State private var showingBatchWorkflowSheet = false
 
     var body: some View {
+        let _ = purchaseService.currentTier
+
         NavigationStack(path: $navigationPath) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
@@ -84,9 +85,7 @@ struct ContentView: View {
                             workflows: viewModel.currentDomainWorkflows,
                             trackingLimitMessage: viewModel.trackingLimitMessage,
                             onTrack: {
-                                if !viewModel.trackCurrentDomain() {
-                                    showTrackLimitAlert = true
-                                }
+                                _ = viewModel.trackCurrentDomain()
                             },
                             onTogglePinned: {
                                 guard let trackedDomain = viewModel.currentTrackedDomain else { return }
@@ -248,23 +247,6 @@ struct ContentView: View {
             navigationPath = NavigationPath()
             domainFieldFocused = false
         }
-        .alert("Tracking limit reached", isPresented: $showTrackLimitAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(viewModel.trackingLimitMessage ?? "Tracking limit reached.")
-        }
-        .alert("Feature unavailable", isPresented: Binding(
-            get: { featureGateMessage != nil },
-            set: { newValue in
-                if !newValue {
-                    featureGateMessage = nil
-                }
-            }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(featureGateMessage ?? "")
-        }
         .sheet(item: $editingTrackedDomain) { trackedDomain in
             NavigationStack {
                 Form {
@@ -346,6 +328,12 @@ struct ContentView: View {
                             .font(appDensity.font(.caption))
                             .foregroundStyle(.secondary)
 
+                        if let batchAllowanceSummary = FeatureAccessService.batchAllowanceSummary() {
+                            Text(batchAllowanceSummary)
+                                .font(appDensity.font(.caption2))
+                                .foregroundStyle(.secondary)
+                        }
+
                         TextField(
                             "example.com\napple.com, openai.com",
                             text: $viewModel.bulkInput,
@@ -391,25 +379,25 @@ struct ContentView: View {
                 Menu {
                     if !viewModel.isCurrentDomainTracked {
                         Button("Track this domain") {
-                            if !viewModel.trackCurrentDomain() {
-                                showTrackLimitAlert = true
-                            }
+                            _ = viewModel.trackCurrentDomain()
                         }
                     }
                     Button("Add to workflow") {
-                        if FeatureAccessService.hasAccess(to: .workflows) {
-                            showingCurrentDomainWorkflowSheet = true
-                        } else {
-                            featureGateMessage = FeatureAccessService.upgradeMessage(for: .workflows)
+                        showingCurrentDomainWorkflowSheet = true
+                    }
+                    if FeatureAccessService.hasAccess(to: .advancedExports) {
+                        Button("Copy report JSON") {
+                            guard let json = viewModel.exportJSONString() else { return }
+                            AppClipboard.copy(json)
+                            AppHaptics.copy()
+                        }
+                    } else {
+                        Button("Copy report JSON") {
+                            viewModel.upgradePrompt = FeatureAccessService.upgradePrompt(for: .advancedExports)
                         }
                     }
-                    Button("Copy report JSON") {
-                        guard let json = viewModel.exportJSONString() else { return }
-                        AppClipboard.copy(json)
-                        AppHaptics.copy()
-                    }
                     Button("Export report") {
-                        shareSingleResults(format: .json)
+                        shareSingleResults(format: .text)
                     }
                 } label: {
                     Image(systemName: "bolt.circle")
@@ -463,11 +451,7 @@ struct ContentView: View {
                 if !viewModel.currentBatchResultEntries.isEmpty {
                     Menu {
                         Button("Add to Workflow") {
-                            if FeatureAccessService.hasAccess(to: .workflows) {
-                                showingBatchWorkflowSheet = true
-                            } else {
-                                featureGateMessage = FeatureAccessService.upgradeMessage(for: .workflows)
-                            }
+                            showingBatchWorkflowSheet = true
                         }
                         Divider()
                         Button("Export Batch TXT") {
@@ -2165,6 +2149,7 @@ private extension String {
 struct SettingsView: View {
     @Environment(\.appDensity) private var appDensity
     @Bindable var viewModel: DomainViewModel
+    @State private var purchaseService = PurchaseService.shared
     @AppStorage(DNSResolverOption.userDefaultsKey)
     private var storedResolverURL = DNSResolverOption.defaultURLString
     @AppStorage(AppDensity.userDefaultsKey)
@@ -2185,6 +2170,8 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        let _ = purchaseService.currentTier
+
         Form {
             Section("Display") {
                 Picker("Density", selection: $storedDensity) {
@@ -2233,28 +2220,51 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Features") {
-                LabeledContent("Tier", value: FeatureAccessService.currentTier.title)
+            Section("Pro") {
+                LabeledContent("Status", value: purchaseService.currentTier.title)
 
-                if FeatureAccessService.enabledFeatureLabels().isEmpty {
-                    Text("No features enabled.")
-                        .font(appDensity.font(.caption, design: .default))
-                        .foregroundStyle(.secondary)
+                if purchaseService.currentTier == .free {
+                    Button("Upgrade to Pro") {
+                        viewModel.isPaywallPresented = true
+                    }
                 } else {
-                    ForEach(FeatureAccessService.enabledFeatureLabels(), id: \.self) { label in
-                        Text(label)
+                    Button("Manage Subscription") {
+                        Task {
+                            await purchaseService.manageSubscription()
+                        }
                     }
                 }
 
-                Text("Workflows, batch operations, and advanced exports are prepared for future Pro unlocks. Extended historical datasets are reserved for Data+ scaffolding.")
-                    .font(appDensity.font(.caption, design: .default))
-                    .foregroundStyle(.secondary)
+                Button(purchaseService.isRestoring ? "Restoring…" : "Restore Purchases") {
+                    Task {
+                        await purchaseService.restorePurchases()
+                    }
+                }
+                .disabled(purchaseService.isRestoring || purchaseService.isPurchasing)
+
+                if let statusMessage = purchaseService.statusMessage {
+                    Text(statusMessage)
+                        .font(appDensity.font(.caption, design: .default))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let errorMessage = purchaseService.errorMessage {
+                    Text(errorMessage)
+                        .font(appDensity.font(.caption, design: .default))
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Features") {
+                ForEach(FeatureAccessService.enabledFeatureLabels(), id: \.self) { label in
+                    Text(label)
+                }
             }
 
             Section("About") {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Storage", value: "Local-only")
-                LabeledContent("Report Schema", value: "3.0.0")
+                LabeledContent("Report Schema", value: "3.1.0")
             }
         }
         .navigationTitle("Settings")

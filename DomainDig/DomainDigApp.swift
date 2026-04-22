@@ -11,6 +11,7 @@ import SwiftUI
 struct DomainDigApp: App {
     @AppStorage(AppDensity.userDefaultsKey) private var density = AppDensity.compact.rawValue
     @State private var viewModel = DomainViewModel()
+    @State private var purchaseService = PurchaseService.shared
 
     init() {
         LocalNotificationService.shared.configureForegroundPresentation()
@@ -20,6 +21,10 @@ struct DomainDigApp: App {
         WindowGroup {
             RootTabView(viewModel: viewModel)
                 .environment(\.appDensity, AppDensity(rawValue: density) ?? .compact)
+                .task {
+                    let _ = purchaseService.currentTier
+                    await purchaseService.refreshEntitlements()
+                }
         }
     }
 }

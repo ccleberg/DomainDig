@@ -226,6 +226,8 @@ final class DomainViewModel {
     var watchlistSearchText = ""
     var watchlistFilter: WatchlistFilterOption = .all
     var watchlistSortOption: WatchlistSortOption = .pinned
+    var upgradePrompt: UpgradePromptContext?
+    var isPaywallPresented = false
 
     var trimmedDomain: String {
         domain
@@ -578,6 +580,7 @@ final class DomainViewModel {
         }
 
         guard PremiumAccessService.canAddTrackedDomain(currentCount: trackedDomains.count) else {
+            upgradePrompt = FeatureAccessService.upgradePromptForTrackedDomains(currentCount: trackedDomains.count)
             return false
         }
 
@@ -737,12 +740,18 @@ final class DomainViewModel {
     func runBulkLookup() {
         let domains = parsedDomains(from: bulkInput)
         guard !domains.isEmpty else { return }
-        guard FeatureAccessService.canRunBatch(domainCount: domains.count) else { return }
+        guard FeatureAccessService.canRunBatch(domainCount: domains.count) else {
+            upgradePrompt = FeatureAccessService.upgradePromptForBatch(domainCount: domains.count)
+            return
+        }
         startBatchLookup(domains: domains, source: .manual)
     }
 
     func refreshAllTrackedDomains() {
-        guard FeatureAccessService.canRunBatch(domainCount: sortedTrackedDomains.count) else { return }
+        guard FeatureAccessService.canRunBatch(domainCount: sortedTrackedDomains.count) else {
+            upgradePrompt = FeatureAccessService.upgradePromptForBatch(domainCount: sortedTrackedDomains.count)
+            return
+        }
         startBatchLookup(domains: sortedTrackedDomains.map(\.domain), source: .watchlistRefresh)
     }
 
@@ -791,7 +800,10 @@ final class DomainViewModel {
         let normalizedDomains = normalizedDomains(domains)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !normalizedDomains.isEmpty else { return nil }
-        guard FeatureAccessService.canCreateWorkflow(currentCount: workflows.count) else { return nil }
+        guard FeatureAccessService.canCreateWorkflow(currentCount: workflows.count) else {
+            upgradePrompt = FeatureAccessService.upgradePromptForWorkflows(currentCount: workflows.count)
+            return nil
+        }
 
         let workflow = DomainWorkflow(
             name: trimmedName,
@@ -855,7 +867,10 @@ final class DomainViewModel {
 
     func runWorkflow(_ workflow: DomainWorkflow) {
         guard !workflow.domains.isEmpty else { return }
-        guard FeatureAccessService.canRunBatch(domainCount: workflow.domains.count) else { return }
+        guard FeatureAccessService.canRunBatch(domainCount: workflow.domains.count) else {
+            upgradePrompt = FeatureAccessService.upgradePromptForBatch(domainCount: workflow.domains.count)
+            return
+        }
         startBatchLookup(domains: workflow.domains, source: .workflow, workflow: workflow)
     }
 

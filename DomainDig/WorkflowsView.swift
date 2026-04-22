@@ -10,24 +10,24 @@ private enum WorkflowDestinationMode: String, CaseIterable, Identifiable {
 struct WorkflowsView: View {
     @Environment(\.appDensity) private var appDensity
     @Bindable var viewModel: DomainViewModel
+    @State private var purchaseService = PurchaseService.shared
 
     @State private var showingCreateWorkflow = false
 
     var body: some View {
+        let _ = purchaseService.currentTier
+
         List {
-            if FeatureAccessService.hasAccess(to: .workflows) {
-                workflowContent
-            } else {
+            if let limitMessage = FeatureAccessService.workflowAllowanceSummary(currentCount: viewModel.workflows.count) {
                 Section {
-                    EmptyStateCardView(
-                        title: "Workflows",
-                        message: "Reusable workflow sets are scaffolded for this release and will unlock with Pro.",
-                        suggestion: FeatureAccessService.upgradeMessage(for: .workflows),
-                        systemImage: "square.stack.3d.down.right"
-                    )
+                    Text(limitMessage)
+                        .font(appDensity.font(.caption))
+                        .foregroundStyle(.secondary)
                 }
                 .listRowBackground(Color(.systemGray6).opacity(0.5))
             }
+
+            workflowContent
         }
         .scrollContentBackground(.hidden)
         .background(Color.black)
@@ -36,17 +36,15 @@ struct WorkflowsView: View {
         }
         .navigationTitle("Workflows")
         .toolbar {
-            if FeatureAccessService.hasAccess(to: .workflows) {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showingCreateWorkflow = true
-                    } label: {
-                        Image(systemName: "plus.circle")
-                    }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    showingCreateWorkflow = true
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
 
-                    if !viewModel.workflows.isEmpty {
-                        EditButton()
-                    }
+                if !viewModel.workflows.isEmpty {
+                    EditButton()
                 }
             }
         }
@@ -429,10 +427,13 @@ struct WorkflowComposerView: View {
     private func saveWorkflow() {
         if let workflow {
             viewModel.updateWorkflow(workflow, name: name, domains: parsedDomains, notes: notes)
-        } else {
-            _ = viewModel.createWorkflow(name: name, domains: parsedDomains, notes: notes)
+            dismiss()
+            return
         }
-        dismiss()
+
+        if viewModel.createWorkflow(name: name, domains: parsedDomains, notes: notes) != nil {
+            dismiss()
+        }
     }
 }
 
@@ -678,10 +679,12 @@ struct WorkflowBulkAddSheet: View {
         case .existing:
             guard let selectedWorkflowID, let workflow = viewModel.workflow(withID: selectedWorkflowID) else { return }
             viewModel.addDomains(selectedDomainList, to: workflow)
+            dismiss()
         case .new:
-            _ = viewModel.createWorkflow(name: newWorkflowName, domains: selectedDomainList, notes: newWorkflowNotes)
+            guard viewModel.createWorkflow(name: newWorkflowName, domains: selectedDomainList, notes: newWorkflowNotes) != nil else {
+                return
+            }
+            dismiss()
         }
-
-        dismiss()
     }
 }

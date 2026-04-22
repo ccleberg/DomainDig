@@ -2,6 +2,6 @@ import Foundation
 
 enum AppVersion {
     static var current: String {
-        "3.0.0"
+        "3.1.0"
     }
 }
