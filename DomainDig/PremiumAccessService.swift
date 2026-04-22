@@ -2,14 +2,23 @@ import Foundation
 
 enum PremiumAccessService {
     static func hasAccess(to capability: PremiumCapability) -> Bool {
-        true
+        switch capability {
+        case .advancedExports:
+            return FeatureAccessService.hasAccess(to: .advancedExports)
+        case .batchTracking:
+            return FeatureAccessService.hasAccess(to: .batchOperations)
+        case .unlimitedTrackedDomains:
+            return FeatureAccessService.currentTier != .free
+        case .automatedMonitoring, .pushAlerts:
+            return false
+        }
     }
 
     static func trackedDomainLimitMessage(currentCount: Int) -> String? {
-        nil
+        FeatureAccessService.trackedDomainLimitMessage(currentCount: currentCount)
     }
 
     static func canAddTrackedDomain(currentCount: Int) -> Bool {
-        true
+        FeatureAccessService.canAddTrackedDomain(currentCount: currentCount)
     }
 }

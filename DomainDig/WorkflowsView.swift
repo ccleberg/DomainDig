@@ -15,57 +15,18 @@ struct WorkflowsView: View {
 
     var body: some View {
         List {
-            if viewModel.batchLookupSource == .workflow, (!viewModel.batchResults.isEmpty || viewModel.batchLookupRunning) {
-                Section("Workflow Run") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ProgressView(
-                            value: Double(viewModel.batchCompletedCount),
-                            total: Double(max(viewModel.batchTotalCount, 1))
-                        )
-                        .tint(.cyan)
-
-                        HStack {
-                            Text(viewModel.batchProgressLabel)
-                                .font(appDensity.font(.caption))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if viewModel.batchLookupRunning {
-                                Button("Cancel") {
-                                    viewModel.cancelBatchLookup()
-                                }
-                                .buttonStyle(.bordered)
-                                .font(appDensity.font(.caption2))
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-                .listRowBackground(Color(.systemGray6).opacity(0.5))
-            }
-
-            if viewModel.workflows.isEmpty {
+            if FeatureAccessService.hasAccess(to: .workflows) {
+                workflowContent
+            } else {
                 Section {
                     EmptyStateCardView(
-                        title: "No Workflows Yet",
-                        message: "Workflows save a reusable set of domains so repeat inspections take one tap instead of rebuilding the same batch each time.",
-                        suggestion: "Create a workflow for a weekly audit set, customer domains, or a monitoring group.",
+                        title: "Workflows",
+                        message: "Reusable workflow sets are scaffolded for this release and will unlock with Pro.",
+                        suggestion: FeatureAccessService.upgradeMessage(for: .workflows),
                         systemImage: "square.stack.3d.down.right"
                     )
                 }
                 .listRowBackground(Color(.systemGray6).opacity(0.5))
-            } else {
-                ForEach(viewModel.workflows) { workflow in
-                    NavigationLink {
-                        WorkflowDetailView(viewModel: viewModel, workflowID: workflow.id)
-                    } label: {
-                        WorkflowRowView(workflow: workflow)
-                    }
-                    .listRowBackground(Color(.systemGray6).opacity(0.5))
-                }
-                .onDelete { offsets in
-                    let workflows = offsets.map { viewModel.workflows[$0] }
-                    workflows.forEach(viewModel.deleteWorkflow)
-                }
             }
         }
         .scrollContentBackground(.hidden)
@@ -75,15 +36,17 @@ struct WorkflowsView: View {
         }
         .navigationTitle("Workflows")
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    showingCreateWorkflow = true
-                } label: {
-                    Image(systemName: "plus.circle")
-                }
+            if FeatureAccessService.hasAccess(to: .workflows) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showingCreateWorkflow = true
+                    } label: {
+                        Image(systemName: "plus.circle")
+                    }
 
-                if !viewModel.workflows.isEmpty {
-                    EditButton()
+                    if !viewModel.workflows.isEmpty {
+                        EditButton()
+                    }
                 }
             }
         }
@@ -101,6 +64,62 @@ struct WorkflowsView: View {
             get: { viewModel.latestWorkflowRunSummary },
             set: { viewModel.latestWorkflowRunSummary = $0 }
         )
+    }
+
+    @ViewBuilder
+    private var workflowContent: some View {
+        if viewModel.batchLookupSource == .workflow, (!viewModel.batchResults.isEmpty || viewModel.batchLookupRunning) {
+            Section("Workflow Run") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ProgressView(
+                        value: Double(viewModel.batchCompletedCount),
+                        total: Double(max(viewModel.batchTotalCount, 1))
+                    )
+                    .tint(.cyan)
+
+                    HStack {
+                        Text(viewModel.batchProgressLabel)
+                            .font(appDensity.font(.caption))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if viewModel.batchLookupRunning {
+                            Button("Cancel") {
+                                viewModel.cancelBatchLookup()
+                            }
+                            .buttonStyle(.bordered)
+                            .font(appDensity.font(.caption2))
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .listRowBackground(Color(.systemGray6).opacity(0.5))
+        }
+
+        if viewModel.workflows.isEmpty {
+            Section {
+                EmptyStateCardView(
+                    title: "No Workflows Yet",
+                    message: "Workflows save a reusable set of domains so repeat inspections take one tap instead of rebuilding the same batch each time.",
+                    suggestion: "Create a workflow for a weekly audit set, customer domains, or a monitoring group.",
+                    systemImage: "square.stack.3d.down.right"
+                )
+            }
+            .listRowBackground(Color(.systemGray6).opacity(0.5))
+        } else {
+            ForEach(viewModel.workflows) { workflow in
+                NavigationLink {
+                    WorkflowDetailView(viewModel: viewModel, workflowID: workflow.id)
+                } label: {
+                    WorkflowRowView(workflow: workflow)
+                }
+                .listRowBackground(Color(.systemGray6).opacity(0.5))
+            }
+            .onDelete { offsets in
+                let workflows = offsets.map { viewModel.workflows[$0] }
+                workflows.forEach(viewModel.deleteWorkflow)
+            }
+        }
     }
 }
 
@@ -197,11 +216,18 @@ struct WorkflowDetailView: View {
                                 Button("Export TXT") {
                                     shareWorkflowResults(format: .text)
                                 }
-                                Button("Export CSV") {
-                                    shareWorkflowResults(format: .csv)
-                                }
-                                Button("Export JSON") {
-                                    shareWorkflowResults(format: .json)
+                                if FeatureAccessService.hasAccess(to: .advancedExports) {
+                                    Button("Export CSV") {
+                                        shareWorkflowResults(format: .csv)
+                                    }
+                                    Button("Export JSON") {
+                                        shareWorkflowResults(format: .json)
+                                    }
+                                } else {
+                                    Button("CSV Export • Available in Pro") {}
+                                        .disabled(true)
+                                    Button("JSON Export • Available in Pro") {}
+                                        .disabled(true)
                                 }
                             } label: {
                                 Label("Export Results", systemImage: "square.and.arrow.up")
@@ -478,11 +504,18 @@ struct WorkflowRunSummaryView: View {
                         Button("Export TXT") {
                             share(format: .text)
                         }
-                        Button("Export CSV") {
-                            share(format: .csv)
-                        }
-                        Button("Export JSON") {
-                            share(format: .json)
+                        if FeatureAccessService.hasAccess(to: .advancedExports) {
+                            Button("Export CSV") {
+                                share(format: .csv)
+                            }
+                            Button("Export JSON") {
+                                share(format: .json)
+                            }
+                        } else {
+                            Button("CSV Export • Available in Pro") {}
+                                .disabled(true)
+                            Button("JSON Export • Available in Pro") {}
+                                .disabled(true)
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")

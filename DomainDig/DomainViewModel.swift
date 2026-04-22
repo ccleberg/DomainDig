@@ -369,11 +369,11 @@ final class DomainViewModel {
     }
 
     var trackingLimitMessage: String? {
-        nil
+        FeatureAccessService.trackedDomainLimitMessage(currentCount: trackedDomains.count)
     }
 
     var canTrackCurrentDomain: Bool {
-        true
+        FeatureAccessService.canAddTrackedDomain(currentCount: trackedDomains.count)
     }
 
     var resolverDisplayName: String {
@@ -665,6 +665,18 @@ final class DomainViewModel {
         }
     }
 
+    func clearWorkflows() {
+        workflows.removeAll()
+        latestWorkflowRunSummary = nil
+        persistWorkflows()
+    }
+
+    func clearTrackedDomains() {
+        trackedDomains.removeAll()
+        refreshingTrackedDomainID = nil
+        persistTrackedDomains()
+    }
+
     func clearRecentSearches() {
         recentSearches.removeAll()
         UserDefaults.standard.removeObject(forKey: Self.recentSearchesKey)
@@ -725,10 +737,12 @@ final class DomainViewModel {
     func runBulkLookup() {
         let domains = parsedDomains(from: bulkInput)
         guard !domains.isEmpty else { return }
+        guard FeatureAccessService.canRunBatch(domainCount: domains.count) else { return }
         startBatchLookup(domains: domains, source: .manual)
     }
 
     func refreshAllTrackedDomains() {
+        guard FeatureAccessService.canRunBatch(domainCount: sortedTrackedDomains.count) else { return }
         startBatchLookup(domains: sortedTrackedDomains.map(\.domain), source: .watchlistRefresh)
     }
 
@@ -777,6 +791,7 @@ final class DomainViewModel {
         let normalizedDomains = normalizedDomains(domains)
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !normalizedDomains.isEmpty else { return nil }
+        guard FeatureAccessService.canCreateWorkflow(currentCount: workflows.count) else { return nil }
 
         let workflow = DomainWorkflow(
             name: trimmedName,
@@ -840,6 +855,7 @@ final class DomainViewModel {
 
     func runWorkflow(_ workflow: DomainWorkflow) {
         guard !workflow.domains.isEmpty else { return }
+        guard FeatureAccessService.canRunBatch(domainCount: workflow.domains.count) else { return }
         startBatchLookup(domains: workflow.domains, source: .workflow, workflow: workflow)
     }
 
@@ -2124,14 +2140,23 @@ final class DomainViewModel {
     }
 
     private func currentBatchReports() -> [DomainReport] {
-        currentBatchResultEntries.map(report(for:))
+        currentBatchResultEntries.map { entry in
+            report(for: entry, workflowContext: activeWorkflowContext)
+        }
     }
 
     private func workflowReports(from summary: WorkflowRunSummary, changedOnly: Bool) -> [DomainReport] {
         let filteredResults = changedOnly ? summary.results.filter(\.hasMeaningfulChange) : summary.results
         return filteredResults.compactMap { result in
             guard let entry = historyEntry(for: result) else { return nil }
-            return report(for: entry)
+            return report(
+                for: entry,
+                workflowContext: DomainWorkflowContext(
+                    workflowID: summary.workflowID,
+                    workflowName: summary.workflowName,
+                    source: "workflow"
+                )
+            )
         }
     }
 
@@ -2150,8 +2175,19 @@ final class DomainViewModel {
         }
     }
 
-    private func report(for entry: HistoryEntry) -> DomainReport {
-        reportBuilder.build(from: entry, previousSnapshot: comparisonSnapshot(for: entry))
+    private func report(for entry: HistoryEntry, workflowContext: DomainWorkflowContext? = nil) -> DomainReport {
+        reportBuilder.build(from: entry, previousSnapshot: comparisonSnapshot(for: entry), workflowContext: workflowContext)
+    }
+
+    private var activeWorkflowContext: DomainWorkflowContext? {
+        guard batchLookupSource == .workflow, let activeWorkflowRunID, let activeWorkflowRunName else {
+            return nil
+        }
+        return DomainWorkflowContext(
+            workflowID: activeWorkflowRunID,
+            workflowName: activeWorkflowRunName,
+            source: "workflow"
+        )
     }
 
     private func placeholderSnapshot(for trackedDomain: TrackedDomain) -> LookupSnapshot {

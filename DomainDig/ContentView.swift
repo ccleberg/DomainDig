@@ -24,7 +24,7 @@ private struct WorkflowNavigationTarget: Hashable {
 
 struct ContentView: View {
     @Environment(\.appDensity) private var appDensity
-    @State private var viewModel = DomainViewModel()
+    @Bindable var viewModel: DomainViewModel
     @State private var navigationPath = NavigationPath()
     @FocusState private var domainFieldFocused: Bool
     @State private var customPortInput = ""
@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var trackingNoteDraft = ""
     @State private var editingTrackedDomain: TrackedDomain?
     @State private var showTrackLimitAlert = false
+    @State private var featureGateMessage: String?
     @State private var inputMode: LookupInputMode = .single
     @State private var collapsedSections: Set<ResultSection> = [.network]
     @State private var showingCurrentDomainWorkflowSheet = false
@@ -222,7 +223,7 @@ struct ContentView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
             .preferredColorScheme(.dark)
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     if viewModel.hasRun {
                         Button {
                             viewModel.reset()
@@ -230,40 +231,6 @@ struct ContentView: View {
                             Image(systemName: "xmark.circle")
                                 .foregroundStyle(.secondary)
                         }
-                    }
-                    NavigationLink {
-                        WatchlistView(viewModel: viewModel)
-                    } label: {
-                        Image(systemName: "eye")
-                            .foregroundStyle(.secondary)
-                    }
-                    Menu {
-                        NavigationLink {
-                            HistoryView(viewModel: viewModel)
-                        } label: {
-                            Label("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
-                        }
-
-                        NavigationLink {
-                            SavedDomainsView(viewModel: viewModel)
-                        } label: {
-                            Label("Saved Domains", systemImage: "bookmark")
-                        }
-
-                        NavigationLink {
-                            WorkflowsView(viewModel: viewModel)
-                        } label: {
-                            Label("Workflows", systemImage: "square.stack.3d.down.right")
-                        }
-
-                        NavigationLink {
-                            SettingsView(viewModel: viewModel)
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -284,7 +251,19 @@ struct ContentView: View {
         .alert("Tracking limit reached", isPresented: $showTrackLimitAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Free version supports up to 3 tracked domains. More tracked domains will be available in a future Pro upgrade.")
+            Text(viewModel.trackingLimitMessage ?? "Tracking limit reached.")
+        }
+        .alert("Feature unavailable", isPresented: Binding(
+            get: { featureGateMessage != nil },
+            set: { newValue in
+                if !newValue {
+                    featureGateMessage = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(featureGateMessage ?? "")
         }
         .sheet(item: $editingTrackedDomain) { trackedDomain in
             NavigationStack {
@@ -361,37 +340,44 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.trimmedDomain.isEmpty)
             } else {
-                VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
-                    Text("Paste domains separated by new lines or commas.")
-                        .font(appDensity.font(.caption))
-                        .foregroundStyle(.secondary)
+                if FeatureAccessService.hasAccess(to: .batchOperations) {
+                    VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
+                        Text("Paste domains separated by new lines or commas.")
+                            .font(appDensity.font(.caption))
+                            .foregroundStyle(.secondary)
 
-                    TextField(
-                        "example.com\napple.com, openai.com",
-                        text: $viewModel.bulkInput,
-                        axis: .vertical
-                    )
-                    .font(appDensity.font(.body))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .lineLimit(4...10)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, appDensity.metrics.controlVerticalPadding)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
+                        TextField(
+                            "example.com\napple.com, openai.com",
+                            text: $viewModel.bulkInput,
+                            axis: .vertical
+                        )
+                        .font(appDensity.font(.body))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .lineLimit(4...10)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, appDensity.metrics.controlVerticalPadding)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
 
-                    Button {
-                        domainFieldFocused = false
-                        viewModel.runBulkLookup()
-                    } label: {
-                        Text(viewModel.batchLookupRunning ? "Running Batch…" : "Run Batch")
-                            .font(appDensity.font(.headline, design: .default, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: appDensity.metrics.controlMinHeight)
+                        Button {
+                            domainFieldFocused = false
+                            viewModel.runBulkLookup()
+                        } label: {
+                            Text(viewModel.batchLookupRunning ? "Running Batch…" : "Run Batch")
+                                .font(appDensity.font(.headline, design: .default, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                                .frame(minHeight: appDensity.metrics.controlMinHeight)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.bulkInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.batchLookupRunning)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.bulkInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.batchLookupRunning)
+                } else {
+                    lockedFeatureCard(
+                        title: "Batch Operations",
+                        message: FeatureAccessService.upgradeMessage(for: .batchOperations)
+                    )
                 }
             }
         }
@@ -411,7 +397,11 @@ struct ContentView: View {
                         }
                     }
                     Button("Add to workflow") {
-                        showingCurrentDomainWorkflowSheet = true
+                        if FeatureAccessService.hasAccess(to: .workflows) {
+                            showingCurrentDomainWorkflowSheet = true
+                        } else {
+                            featureGateMessage = FeatureAccessService.upgradeMessage(for: .workflows)
+                        }
                     }
                     Button("Copy report JSON") {
                         guard let json = viewModel.exportJSONString() else { return }
@@ -437,11 +427,18 @@ struct ContentView: View {
                     Button("Export TXT") {
                         shareSingleResults(format: .text)
                     }
-                    Button("Export CSV") {
-                        shareSingleResults(format: .csv)
-                    }
-                    Button("Export JSON") {
-                        shareSingleResults(format: .json)
+                    if FeatureAccessService.hasAccess(to: .advancedExports) {
+                        Button("Export CSV") {
+                            shareSingleResults(format: .csv)
+                        }
+                        Button("Export JSON") {
+                            shareSingleResults(format: .json)
+                        }
+                    } else {
+                        Button("CSV Export • Available in Pro") {}
+                            .disabled(true)
+                        Button("JSON Export • Available in Pro") {}
+                            .disabled(true)
                     }
                 } label: {
                     Image(systemName: "square.and.arrow.up")
@@ -466,17 +463,28 @@ struct ContentView: View {
                 if !viewModel.currentBatchResultEntries.isEmpty {
                     Menu {
                         Button("Add to Workflow") {
-                            showingBatchWorkflowSheet = true
+                            if FeatureAccessService.hasAccess(to: .workflows) {
+                                showingBatchWorkflowSheet = true
+                            } else {
+                                featureGateMessage = FeatureAccessService.upgradeMessage(for: .workflows)
+                            }
                         }
                         Divider()
                         Button("Export Batch TXT") {
                             shareBatchResults(format: .text)
                         }
-                        Button("Export Batch CSV") {
-                            shareBatchResults(format: .csv)
-                        }
-                        Button("Export Batch JSON") {
-                            shareBatchResults(format: .json)
+                        if FeatureAccessService.hasAccess(to: .advancedExports) {
+                            Button("Export Batch CSV") {
+                                shareBatchResults(format: .csv)
+                            }
+                            Button("Export Batch JSON") {
+                                shareBatchResults(format: .json)
+                            }
+                        } else {
+                            Button("Batch CSV • Available in Pro") {}
+                                .disabled(true)
+                            Button("Batch JSON • Available in Pro") {}
+                                .disabled(true)
                         }
                     } label: {
                         Label("Export", systemImage: "square.and.arrow.up")
@@ -532,6 +540,20 @@ struct ContentView: View {
         Task {
             await viewModel.runCustomPortScan(ports: ports)
         }
+    }
+
+    private func lockedFeatureCard(title: String, message: String) -> some View {
+        VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
+            Text(title)
+                .font(appDensity.font(.headline, design: .default, weight: .semibold))
+            Text(message)
+                .font(appDensity.font(.callout, design: .default))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(appDensity.metrics.cardPadding)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
     }
 
     private func parsedCustomPorts(from input: String) -> [UInt16] {
@@ -2140,7 +2162,7 @@ private extension String {
     }
 }
 
-private struct SettingsView: View {
+struct SettingsView: View {
     @Environment(\.appDensity) private var appDensity
     @Bindable var viewModel: DomainViewModel
     @AppStorage(DNSResolverOption.userDefaultsKey)
@@ -2152,6 +2174,8 @@ private struct SettingsView: View {
     @State private var customResolverURL = DNSResolverOption.defaultURLString
     @State private var showClearHistoryConfirmation = false
     @State private var showClearCacheConfirmation = false
+    @State private var showClearWorkflowsConfirmation = false
+    @State private var showClearTrackedDomainsConfirmation = false
 
     private var customResolverError: String? {
         guard resolverOption == .custom else {
@@ -2199,11 +2223,38 @@ private struct SettingsView: View {
                 Button("Clear Cache", role: .destructive) {
                     showClearCacheConfirmation = true
                 }
+
+                Button("Clear Workflows", role: .destructive) {
+                    showClearWorkflowsConfirmation = true
+                }
+
+                Button("Clear Tracked Domains", role: .destructive) {
+                    showClearTrackedDomainsConfirmation = true
+                }
+            }
+
+            Section("Features") {
+                LabeledContent("Tier", value: FeatureAccessService.currentTier.title)
+
+                if FeatureAccessService.enabledFeatureLabels().isEmpty {
+                    Text("No features enabled.")
+                        .font(appDensity.font(.caption, design: .default))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(FeatureAccessService.enabledFeatureLabels(), id: \.self) { label in
+                        Text(label)
+                    }
+                }
+
+                Text("Workflows, batch operations, and advanced exports are prepared for future Pro unlocks. Extended historical datasets are reserved for Data+ scaffolding.")
+                    .font(appDensity.font(.caption, design: .default))
+                    .foregroundStyle(.secondary)
             }
 
             Section("About") {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Storage", value: "Local-only")
+                LabeledContent("Report Schema", value: "3.0.0")
             }
         }
         .navigationTitle("Settings")
@@ -2222,6 +2273,22 @@ private struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This clears the in-memory lookup cache and cancels any cached in-flight work.")
+        }
+        .alert("Clear workflows?", isPresented: $showClearWorkflowsConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearWorkflows()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes saved workflows only. History, tracked domains, and saved reports stay intact.")
+        }
+        .alert("Clear tracked domains?", isPresented: $showClearTrackedDomainsConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearTrackedDomains()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the watchlist only. History and workflows stay intact.")
         }
         .onAppear {
             let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2247,5 +2314,5 @@ private struct SettingsView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(viewModel: DomainViewModel())
 }

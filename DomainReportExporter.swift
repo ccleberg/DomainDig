@@ -36,25 +36,28 @@ enum DomainReportExporter {
             "DomainDig Report",
             "Domain: \(report.domain)",
             "Timestamp: \(textDateFormatter.string(from: report.timestamp))",
-            "App Version: \(report.appVersion)",
-            "Resolver: \(report.resolverDisplayName)",
-            "Resolver URL: \(report.resolverURLString)",
-            "Source: \(report.resultSource.label)",
+            "App Version: \(report.metadata.appVersion)",
+            "Resolver: \(report.metadata.resolverDisplayName)",
+            "Resolver URL: \(report.metadata.resolverURLString)",
+            "Source: \(report.provenance.source.label)",
             "Availability: \(availabilityLabel(report.availability))",
             "Availability Confidence: \(report.availabilityConfidence?.title ?? "N/A")"
         ]
 
-        if report.isPartialSnapshot {
+        if report.metadata.isPartialSnapshot {
             lines.append("Snapshot Integrity: Partial snapshot")
         }
-        if let auditNote = report.auditNote, !auditNote.isEmpty {
+        if let auditNote = report.metadata.auditNote, !auditNote.isEmpty {
             lines.append("Audit Note: \(auditNote)")
         }
-        if !report.dataSources.isEmpty {
-            lines.append("Data Sources: \(report.dataSources.joined(separator: ", "))")
+        if !report.provenance.dataSources.isEmpty {
+            lines.append("Data Sources: \(report.provenance.dataSources.joined(separator: ", "))")
         }
-        if !report.validationIssues.isEmpty {
-            lines.append("Validation: \(report.validationIssues.joined(separator: " | "))")
+        if !report.metadata.validationIssues.isEmpty {
+            lines.append("Validation: \(report.metadata.validationIssues.joined(separator: " | "))")
+        }
+        if let workflowContext = report.workflowContext {
+            lines.append("Workflow Context: \(workflowContext.workflowName ?? workflowContext.source)")
         }
 
         appendSection("Summary", to: &lines) {
@@ -349,6 +352,9 @@ enum DomainReportExporter {
             "data_sources",
             "audit_note",
             "partial_snapshot",
+            "workflow_name",
+            "workflow_source",
+            "cached_sections",
             "change_summary",
             "change_impact",
             "workflow_insights"
@@ -408,9 +414,12 @@ enum DomainReportExporter {
                 report.network.reachabilitySummary,
                 report.network.geolocationSummary,
                 report.geolocationConfidence?.rawValue ?? "",
-                report.dataSources.joined(separator: " | "),
-                report.auditNote ?? "",
-                report.isPartialSnapshot ? "true" : "false",
+                report.provenance.dataSources.joined(separator: " | "),
+                report.metadata.auditNote ?? "",
+                report.metadata.isPartialSnapshot ? "true" : "false",
+                report.workflowContext?.workflowName ?? "",
+                report.workflowContext?.source ?? "",
+                report.metadata.cachedSections.map(\.rawValue).joined(separator: " | "),
                 report.changeSummary?.message ?? "",
                 report.changeSummary?.impactClassification.rawValue ?? "",
                 workflowInsightSummary

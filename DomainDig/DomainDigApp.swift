@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct DomainDigApp: App {
     @AppStorage(AppDensity.userDefaultsKey) private var density = AppDensity.compact.rawValue
+    @State private var viewModel = DomainViewModel()
 
     init() {
         LocalNotificationService.shared.configureForegroundPresentation()
@@ -17,7 +18,7 @@ struct DomainDigApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootTabView(viewModel: viewModel)
                 .environment(\.appDensity, AppDensity(rawValue: density) ?? .compact)
         }
     }

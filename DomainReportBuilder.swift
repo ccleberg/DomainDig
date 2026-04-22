@@ -3,6 +3,7 @@ import Foundation
 struct DomainReport: Codable {
     let domain: String
     let timestamp: Date
+    let provenance: DomainReportProvenance
     let appVersion: String
     let resolverDisplayName: String
     let resolverURLString: String
@@ -29,6 +30,34 @@ struct DomainReport: Codable {
     let riskAssessment: DomainRiskAssessment
     let insights: [String]
     let changeSummary: DomainChangeSummary?
+    let workflowContext: DomainWorkflowContext?
+    let metadata: DomainReportMetadata
+}
+
+struct DomainReportProvenance: Codable {
+    let collectedAt: Date
+    let source: LookupResultSource
+    let sections: [LookupSectionKind: SectionProvenance]
+    let dataSources: [String]
+}
+
+struct DomainWorkflowContext: Codable {
+    let workflowID: UUID?
+    let workflowName: String?
+    let source: String
+}
+
+struct DomainReportMetadata: Codable {
+    let schemaVersion: String
+    let resolverDisplayName: String
+    let resolverURLString: String
+    let appVersion: String
+    let cachedSections: [LookupSectionKind]
+    let auditNote: String?
+    let validationIssues: [String]
+    let isPartialSnapshot: Bool
+    let errorDetails: [LookupSectionKind: InspectionFailure]
+    let statusMessage: String?
 }
 
 struct DNSResultSummary: Codable {
@@ -87,7 +116,11 @@ struct NetworkSummary: Codable {
 }
 
 struct DomainReportBuilder {
-    func build(from snapshot: LookupSnapshot, previousSnapshot: LookupSnapshot? = nil) -> DomainReport {
+    func build(
+        from snapshot: LookupSnapshot,
+        previousSnapshot: LookupSnapshot? = nil,
+        workflowContext: DomainWorkflowContext? = nil
+    ) -> DomainReport {
         let primaryIP = primaryIPAddress(from: snapshot)
         let analysis = DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
         let changeSummary: DomainChangeSummary?
@@ -108,6 +141,12 @@ struct DomainReportBuilder {
         return DomainReport(
             domain: snapshot.domain,
             timestamp: snapshot.timestamp,
+            provenance: DomainReportProvenance(
+                collectedAt: snapshot.timestamp,
+                source: snapshot.resultSource,
+                sections: snapshot.provenanceBySection,
+                dataSources: snapshot.dataSources
+            ),
             appVersion: snapshot.appVersion,
             resolverDisplayName: snapshot.resolverDisplayName,
             resolverURLString: snapshot.resolverURLString,
@@ -180,12 +219,29 @@ struct DomainReportBuilder {
             subdomainGroups: analysis.subdomainGroups,
             riskAssessment: analysis.riskAssessment,
             insights: analysis.insights,
-            changeSummary: changeSummary
+            changeSummary: changeSummary,
+            workflowContext: workflowContext,
+            metadata: DomainReportMetadata(
+                schemaVersion: "3.0.0",
+                resolverDisplayName: snapshot.resolverDisplayName,
+                resolverURLString: snapshot.resolverURLString,
+                appVersion: snapshot.appVersion,
+                cachedSections: snapshot.cachedSections,
+                auditNote: snapshot.note,
+                validationIssues: snapshot.validationIssues,
+                isPartialSnapshot: snapshot.isPartialSnapshot,
+                errorDetails: snapshot.errorDetails,
+                statusMessage: snapshot.statusMessage
+            )
         )
     }
 
-    func build(from entry: HistoryEntry, previousSnapshot: LookupSnapshot? = nil) -> DomainReport {
-        build(from: entry.snapshot, previousSnapshot: previousSnapshot)
+    func build(
+        from entry: HistoryEntry,
+        previousSnapshot: LookupSnapshot? = nil,
+        workflowContext: DomainWorkflowContext? = nil
+    ) -> DomainReport {
+        build(from: entry.snapshot, previousSnapshot: previousSnapshot, workflowContext: workflowContext)
     }
 
     private func primaryIPAddress(from snapshot: LookupSnapshot) -> String? {

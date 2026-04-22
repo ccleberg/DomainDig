@@ -55,7 +55,7 @@ struct WatchlistView: View {
                 }
                 .listRowBackground(Color(.systemGray6).opacity(0.5))
             } else {
-                if let limitMessage = PremiumAccessService.trackedDomainLimitMessage(currentCount: viewModel.trackedDomains.count) {
+                if let limitMessage = FeatureAccessService.trackedDomainLimitMessage(currentCount: viewModel.trackedDomains.count) {
                     Section {
                         Text(limitMessage)
                             .font(appDensity.font(.caption))
@@ -108,12 +108,19 @@ struct WatchlistView: View {
                             shareTrackedDomains(format: .text)
                         }
 
-                        Button("Export CSV") {
-                            shareTrackedDomains(format: .csv)
-                        }
+                        if FeatureAccessService.hasAccess(to: .advancedExports) {
+                            Button("Export CSV") {
+                                shareTrackedDomains(format: .csv)
+                            }
 
-                        Button("Export JSON") {
-                            shareTrackedDomains(format: .json)
+                            Button("Export JSON") {
+                                shareTrackedDomains(format: .json)
+                            }
+                        } else {
+                            Button("CSV Export • Available in Pro") {}
+                                .disabled(true)
+                            Button("JSON Export • Available in Pro") {}
+                                .disabled(true)
                         }
                     } label: {
                         Image(systemName: "line.3.horizontal.decrease.circle")
