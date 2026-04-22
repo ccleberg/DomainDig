@@ -11,12 +11,7 @@ struct BatchSweepSummaryView: View {
             return summary.results
         }
 
-        return summary.results.filter {
-            $0.quickStatus == "Changed" ||
-                $0.quickStatus == "High" ||
-                $0.certificateWarningLevel != .none ||
-                $0.status == .failed
-        }
+        return summary.results.filter(\.hasMeaningfulChange)
     }
 
     var body: some View {

@@ -167,11 +167,23 @@ struct HistoryDetailView: View {
         entry.snapshot
     }
 
+    private var report: DomainReport {
+        DomainReportBuilder().build(from: entry, previousSnapshot: viewModel.comparisonSnapshot(for: entry))
+    }
+
+    private var trackedDomain: TrackedDomain? {
+        viewModel.trackedDomains.first { $0.domain.caseInsensitiveCompare(entry.domain) == .orderedSame }
+    }
+
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
                 snapshotBanner
                 SummaryView(fields: DomainViewModel.summaryFields(from: snapshot))
+                    .padding(.top, 8)
+                RiskSummaryCardView(report: report)
+                    .padding(.top, 8)
+                InsightsSummaryCardView(insights: report.insights)
                     .padding(.top, 8)
                 DomainSectionView(
                     isCollapsed: .constant(false),
@@ -183,14 +195,14 @@ struct HistoryDetailView: View {
                     provenance: snapshot.provenanceBySection[.availability],
                     confidence: snapshot.availabilityConfidence,
                     snapshotNote: entry.note,
-                    trackedDomain: viewModel.trackedDomains.first(where: { $0.domain.lowercased() == entry.domain.lowercased() }),
+                    trackedDomain: trackedDomain,
                     workflows: viewModel.workflowsContaining(domain: entry.domain),
                     trackingLimitMessage: nil,
                     onTrack: {
                         _ = viewModel.trackDomain(domain: entry.domain, availabilityStatus: entry.availabilityResult?.status)
                     },
                     onTogglePinned: {
-                        guard let trackedDomain = viewModel.trackedDomains.first(where: { $0.domain.lowercased() == entry.domain.lowercased() }) else { return }
+                        guard let trackedDomain else { return }
                         viewModel.togglePinned(for: trackedDomain)
                     },
                     onEditNote: nil,
@@ -212,6 +224,7 @@ struct HistoryDetailView: View {
                 SubdomainsSectionView(
                     isCollapsed: .constant(false),
                     rows: DomainViewModel.subdomainRows(from: snapshot),
+                    groups: report.subdomainGroups,
                     loading: false,
                     error: snapshot.subdomainsError,
                     provenance: snapshot.provenanceBySection[.subdomains],
@@ -235,6 +248,7 @@ struct HistoryDetailView: View {
                 DNSSectionView(
                     isCollapsed: .constant(false),
                     dnssecLabel: DomainViewModel.dnssecLabel(from: snapshot),
+                    patternSummary: report.dns.patternSummary,
                     sections: DomainViewModel.dnsRows(from: snapshot),
                     ptrMessage: DomainViewModel.ptrMessage(from: snapshot),
                     loading: false,
@@ -247,6 +261,7 @@ struct HistoryDetailView: View {
                     isCollapsed: .constant(false),
                     certificateRows: DomainViewModel.webCertificateRows(from: snapshot),
                     sslInfo: snapshot.sslInfo,
+                    tlsSummary: report.web,
                     sslLoading: false,
                     sslError: snapshot.sslError,
                     tlsProvenance: snapshot.provenanceBySection[.ssl],
@@ -265,6 +280,7 @@ struct HistoryDetailView: View {
                 EmailSectionView(
                     isCollapsed: .constant(false),
                     rows: DomainViewModel.emailRows(from: snapshot),
+                    assessment: report.email,
                     loading: false,
                     provenance: snapshot.provenanceBySection[.emailSecurity],
                     confidence: snapshot.emailSecurityConfidence,

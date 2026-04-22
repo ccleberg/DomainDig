@@ -60,11 +60,32 @@ enum DomainReportExporter {
         appendSection("Summary", to: &lines) {
             [
                 "Primary IP: \(report.dns.primaryIP ?? "Unavailable")",
+                "Risk Score: \(report.riskAssessment.score) (\(report.riskAssessment.level.title))",
                 "TLS Status: \(report.web.tlsStatus)",
                 "HTTP: \(httpSummary(for: report))",
                 "Email: \(report.email.summary)",
                 "Subdomains: \(report.subdomains.count)"
             ]
+        }
+
+        appendSection("Risk", to: &lines) {
+            var values = [
+                "Score: \(report.riskAssessment.score)",
+                "Level: \(report.riskAssessment.level.title)"
+            ]
+            if report.riskAssessment.factors.isEmpty {
+                values.append("Factors: None")
+            } else {
+                values.append("Factors:")
+                for factor in report.riskAssessment.factors {
+                    values.append("  [\(factor.impact.rawValue)] \(factor.description)")
+                }
+            }
+            return values
+        }
+
+        appendSection("Insights", to: &lines) {
+            report.insights.isEmpty ? ["No deterministic insights triggered"] : report.insights.map { "- \($0)" }
         }
 
         appendSection("Ownership", to: &lines) {
@@ -93,7 +114,8 @@ enum DomainReportExporter {
                 "Lookup Duration: \(durationLabel(report.dns.lookupDurationMs))",
                 "Primary IP: \(report.dns.primaryIP ?? "Unavailable")",
                 "PTR: \(report.dns.ptrRecord ?? report.dns.ptrError ?? "Unavailable")",
-                "DNSSEC: \(dnssecLabel(report.dns.dnssecSigned))"
+                "DNSSEC: \(dnssecLabel(report.dns.dnssecSigned))",
+                "Patterns: \(report.dns.patternSummary.patterns.joined(separator: " | ").nilIfEmpty ?? "None")"
             ]
             if let provenance = report.sectionProvenance[.dns] {
                 dnsLines.append("Provenance: \(provenanceLabel(provenance))")
@@ -117,6 +139,8 @@ enum DomainReportExporter {
         appendSection("Web", to: &lines) {
             var webLines = [
                 "TLS Status: \(report.web.tlsStatus)",
+                "TLS Grade: \(report.web.tlsGrade.rawValue)",
+                "TLS Highlights: \(report.web.tlsHighlights.joined(separator: " | "))",
                 "Certificate Warning: \(report.web.certificateWarningLevel.title)",
                 "Security Grade: \(report.web.securityGrade ?? "Unavailable")",
                 "HTTP Status: \(report.web.statusCode.map(String.init) ?? "Unavailable")",
@@ -161,6 +185,12 @@ enum DomainReportExporter {
 
         appendSection("Email", to: &lines) {
             var emailLines = [report.email.summary]
+            if let grade = report.email.grade {
+                emailLines.append("Grade: \(grade.rawValue)")
+            }
+            if !report.email.reasons.isEmpty {
+                emailLines.append("Why: \(report.email.reasons.joined(separator: " | "))")
+            }
             emailLines.append("Confidence: \(report.emailConfidence?.title ?? "N/A")")
             if let provenance = report.sectionProvenance[.emailSecurity] {
                 emailLines.append("Provenance: \(provenanceLabel(provenance))")
@@ -217,6 +247,9 @@ enum DomainReportExporter {
                 values.append("None")
                 return values
             }
+            if !report.subdomainGroups.isEmpty {
+                values.append("Groups: \(report.subdomainGroups.map { "\($0.label): \($0.subdomains.count)" }.joined(separator: " | "))")
+            }
             values.append(contentsOf: report.subdomains.map { "- \($0)" })
             return values
         }
@@ -229,9 +262,16 @@ enum DomainReportExporter {
             var values = [
                 "Has Changes: \(changeSummary.hasChanges ? "Yes" : "No")",
                 "Severity: \(changeSummary.severity.title)",
+                "Impact: \(changeSummary.impactClassification.title)",
                 "Inferred Summary: \(changeSummary.message)",
                 "Changed Sections: \(changeSummary.changedSections.isEmpty ? "None" : changeSummary.changedSections.joined(separator: ", "))"
             ]
+            if let riskScoreDelta = changeSummary.riskScoreDelta {
+                values.append("Risk Delta: \(riskScoreDelta >= 0 ? "+" : "")\(riskScoreDelta)")
+            }
+            if !changeSummary.insights.isEmpty {
+                values.append("Insights: \(changeSummary.insights.joined(separator: " | "))")
+            }
             if !changeSummary.observedFacts.isEmpty {
                 values.append("Observed: \(changeSummary.observedFacts.joined(separator: " | "))")
             }
@@ -262,6 +302,11 @@ enum DomainReportExporter {
     }
 
     static func csv(for reports: [DomainReport]) -> String {
+        csv(for: reports, workflowInsights: [])
+    }
+
+    static func csv(for reports: [DomainReport], workflowInsights: [WorkflowInsight]) -> String {
+        let workflowInsightSummary = workflowInsights.map(\.description).joined(separator: " | ")
         let headers = [
             "domain",
             "timestamp",
@@ -269,6 +314,10 @@ enum DomainReportExporter {
             "result_source",
             "resolver",
             "availability",
+            "risk_score",
+            "risk_level",
+            "risk_factors",
+            "insights",
             "availability_confidence",
             "registrar",
             "ownership_confidence",
@@ -277,15 +326,20 @@ enum DomainReportExporter {
             "primary_ip",
             "ptr_record",
             "dnssec_signed",
+            "dns_patterns",
             "tls_status",
+            "tls_grade",
+            "tls_highlights",
             "certificate_warning_level",
             "hsts_preloaded",
             "http_status",
             "http_security_grade",
             "final_url",
             "email_summary",
+            "email_grade",
             "email_confidence",
             "subdomain_count",
+            "subdomain_groups",
             "subdomain_confidence",
             "subdomains",
             "open_ports",
@@ -295,7 +349,9 @@ enum DomainReportExporter {
             "data_sources",
             "audit_note",
             "partial_snapshot",
-            "change_summary"
+            "change_summary",
+            "change_impact",
+            "workflow_insights"
         ]
 
         let rows = reports.map { report in
@@ -307,6 +363,11 @@ enum DomainReportExporter {
             let subdomainCount = String(report.subdomains.count)
             let subdomains = report.subdomains.joined(separator: " | ")
             let openPorts = report.network.openPorts.map(String.init).joined(separator: " | ")
+            let riskFactors = report.riskAssessment.factors.map(\.description).joined(separator: " | ")
+            let insights = report.insights.joined(separator: " | ")
+            let dnsPatterns = report.dns.patternSummary.patterns.joined(separator: " | ")
+            let tlsHighlights = report.web.tlsHighlights.joined(separator: " | ")
+            let subdomainGroups = report.subdomainGroups.map { "\($0.label):\($0.subdomains.count)" }.joined(separator: " | ")
 
             return [
                 report.domain,
@@ -315,6 +376,10 @@ enum DomainReportExporter {
                 report.resultSource.rawValue,
                 report.resolverDisplayName,
                 availabilityLabel(report.availability),
+                "\(report.riskAssessment.score)",
+                report.riskAssessment.level.rawValue,
+                riskFactors,
+                insights,
                 report.availabilityConfidence?.rawValue ?? "",
                 report.ownership?.registrar ?? "",
                 report.ownershipConfidence?.rawValue ?? "",
@@ -323,15 +388,20 @@ enum DomainReportExporter {
                 report.dns.primaryIP ?? "",
                 report.dns.ptrRecord ?? "",
                 dnssecSigned,
+                dnsPatterns,
                 report.web.tlsStatus,
+                report.web.tlsGrade.rawValue,
+                tlsHighlights,
                 report.web.certificateWarningLevel.rawValue,
                 hstsPreloaded,
                 httpStatus,
                 report.web.securityGrade ?? "",
                 report.web.finalURL ?? "",
                 report.email.summary,
+                report.email.grade?.rawValue ?? "",
                 report.emailConfidence?.rawValue ?? "",
                 subdomainCount,
+                subdomainGroups,
                 report.subdomainConfidence?.rawValue ?? "",
                 subdomains,
                 openPorts,
@@ -341,7 +411,9 @@ enum DomainReportExporter {
                 report.dataSources.joined(separator: " | "),
                 report.auditNote ?? "",
                 report.isPartialSnapshot ? "true" : "false",
-                report.changeSummary?.message ?? ""
+                report.changeSummary?.message ?? "",
+                report.changeSummary?.impactClassification.rawValue ?? "",
+                workflowInsightSummary
             ]
         }
 

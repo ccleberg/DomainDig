@@ -215,6 +215,11 @@ struct WorkflowDetailView: View {
                             statRow(label: "Changed", value: "\(latestSummary.changedDomains)")
                             statRow(label: "Warnings", value: "\(latestSummary.warningDomains)")
                             statRow(label: "Unchanged", value: "\(latestSummary.unchangedDomains)")
+                            if !latestSummary.workflowInsights.isEmpty {
+                                Text(latestSummary.workflowInsights[0].description)
+                                    .font(appDensity.font(.caption))
+                                    .foregroundStyle(.secondary)
+                            }
 
                             Button {
                                 viewModel.latestWorkflowRunSummary = latestSummary
@@ -429,6 +434,21 @@ struct WorkflowRunSummaryView: View {
 
                 Section {
                     Toggle("Show unchanged domains", isOn: $showAllResults)
+                }
+
+                if !summary.workflowInsights.isEmpty {
+                    Section("Workflow Insights") {
+                        ForEach(summary.workflowInsights) { insight in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(insight.description)
+                                    .font(.system(.callout, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                                Text(insight.domainsInvolved.joined(separator: ", "))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
 
                 Section(visibleResults.isEmpty ? "Meaningful Changes" : "Results") {

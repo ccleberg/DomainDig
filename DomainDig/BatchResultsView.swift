@@ -73,6 +73,9 @@ struct BatchResultRowView: View {
 
             HStack(spacing: 10) {
                 AppStatusBadgeView(model: AppStatusFactory.availability(result.availability))
+                if let riskScore = result.riskScore, let riskLevel = result.riskLevel {
+                    Text("Risk \(riskScore) \(riskLevel.title)")
+                }
                 Text(result.primaryIP ?? "No IP")
                 Text(result.timestamp.formatted(date: .abbreviated, time: .shortened))
             }
@@ -83,6 +86,12 @@ struct BatchResultRowView: View {
                 Text(summaryMessage)
                     .font(appDensity.font(.caption2))
                     .foregroundStyle(.secondary)
+            }
+
+            if let changeClassification = result.changeClassification {
+                Text("Impact: \(changeClassification.title)")
+                    .font(appDensity.font(.caption2))
+                    .foregroundStyle(changeClassification == .critical ? .red : (changeClassification == .warning ? .yellow : .secondary))
             }
 
             if let errorMessage = result.errorMessage {
@@ -114,10 +123,10 @@ struct BatchResultRowView: View {
         case .running:
             return .init(title: "Running", systemImage: "arrow.clockwise", foregroundColor: .cyan, backgroundColor: .cyan.opacity(0.16))
         case .completed:
-            if result.changeSeverity == .high || result.certificateWarningLevel == .critical {
-                return .init(title: "High", systemImage: "exclamationmark.octagon.fill", foregroundColor: .red, backgroundColor: .red.opacity(0.16))
+            if result.changeClassification == .critical || result.certificateWarningLevel == .critical || result.riskLevel == .high {
+                return .init(title: "Critical", systemImage: "exclamationmark.octagon.fill", foregroundColor: .red, backgroundColor: .red.opacity(0.16))
             }
-            if result.changeSeverity == .medium || result.certificateWarningLevel == .warning {
+            if result.changeClassification == .warning || result.changeSeverity == .medium || result.certificateWarningLevel == .warning {
                 return .init(title: "Warning", systemImage: "exclamationmark.triangle.fill", foregroundColor: .yellow, backgroundColor: .yellow.opacity(0.16))
             }
             if result.quickStatus == "Changed" {

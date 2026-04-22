@@ -57,7 +57,9 @@ enum DomainDiffService {
     static func summary(
         from oldSnapshot: LookupSnapshot,
         to newSnapshot: LookupSnapshot,
-        generatedAt: Date = Date()
+        generatedAt: Date = Date(),
+        riskAssessment: DomainRiskAssessment? = nil,
+        insights: [String]? = nil
     ) -> DomainChangeSummary {
         let sections = diff(from: oldSnapshot, to: newSnapshot)
         let allChangedItems = sections
@@ -70,16 +72,30 @@ enum DomainDiffService {
         let observedFacts = observedFacts(from: allChangedItems)
         let inferredConclusions = highlights.isEmpty ? [] : [message]
         let contextNote = comparisonContextNote(from: oldSnapshot, to: newSnapshot)
+        let newAnalysis = DomainInsightEngine.analyze(snapshot: newSnapshot, previousSnapshot: oldSnapshot)
+        let currentRiskAssessment = riskAssessment ?? newAnalysis.riskAssessment
+        let currentInsights = insights ?? newAnalysis.insights
+        let oldRiskAssessment = DomainInsightEngine.analyze(snapshot: oldSnapshot).riskAssessment
+        let riskScoreDelta = currentRiskAssessment.score - oldRiskAssessment.score
+        let impactClassification = DomainInsightEngine.impactClassification(
+            severity: severity,
+            riskDelta: riskScoreDelta,
+            changedSections: highlights
+        )
 
         return DomainChangeSummary(
             hasChanges: !allChangedItems.isEmpty,
             changedSections: highlights,
             message: message,
             severity: severity,
+            impactClassification: impactClassification,
             generatedAt: generatedAt,
             observedFacts: observedFacts,
             inferredConclusions: inferredConclusions,
-            contextNote: contextNote
+            contextNote: contextNote,
+            riskAssessment: currentRiskAssessment,
+            insights: currentInsights,
+            riskScoreDelta: riskScoreDelta
         )
     }
 

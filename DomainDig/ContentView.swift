@@ -58,6 +58,12 @@ struct ContentView: View {
                         if viewModel.resultsLoaded {
                             SummaryView(fields: viewModel.summaryFields)
                                 .padding(.top, appDensity.metrics.cardSpacing)
+                            if let report = viewModel.currentReport {
+                                RiskSummaryCardView(report: report)
+                                    .padding(.top, appDensity.metrics.cardSpacing)
+                                InsightsSummaryCardView(insights: report.insights)
+                                    .padding(.top, appDensity.metrics.cardSpacing)
+                            }
                             if let changeSummary = viewModel.currentChangeSummary {
                                 DomainChangeSummaryView(summary: changeSummary)
                                     .padding(.top, appDensity.metrics.cardSpacing)
@@ -114,6 +120,7 @@ struct ContentView: View {
                         SubdomainsSectionView(
                             isCollapsed: sectionCollapsedBinding(.subdomains),
                             rows: viewModel.subdomainRows,
+                            groups: viewModel.currentSubdomainGroups,
                             loading: viewModel.subdomainsLoading,
                             error: viewModel.subdomainsError,
                             provenance: viewModel.currentSnapshot.provenanceBySection[.subdomains],
@@ -133,6 +140,7 @@ struct ContentView: View {
                         DNSSectionView(
                             isCollapsed: sectionCollapsedBinding(.dns),
                             dnssecLabel: viewModel.dnssecLabel,
+                            patternSummary: viewModel.currentDNSPatterns,
                             sections: viewModel.dnsRows,
                             ptrMessage: viewModel.ptrMessage,
                             loading: viewModel.dnsLoading || viewModel.ptrLoading,
@@ -145,6 +153,7 @@ struct ContentView: View {
                             isCollapsed: sectionCollapsedBinding(.web),
                             certificateRows: viewModel.webCertificateRows,
                             sslInfo: viewModel.sslInfo,
+                            tlsSummary: viewModel.currentTLSSummary,
                             sslLoading: viewModel.sslLoading || viewModel.hstsLoading,
                             sslError: viewModel.sslError,
                             tlsProvenance: viewModel.currentSnapshot.provenanceBySection[.ssl],
@@ -163,6 +172,7 @@ struct ContentView: View {
                         EmailSectionView(
                             isCollapsed: sectionCollapsedBinding(.email),
                             rows: viewModel.emailRows,
+                            assessment: viewModel.currentEmailAssessment,
                             loading: viewModel.emailSecurityLoading,
                             provenance: viewModel.currentSnapshot.provenanceBySection[.emailSecurity],
                             confidence: viewModel.currentSnapshot.emailSecurityConfidence,
@@ -654,6 +664,107 @@ struct SummaryView: View {
     }
 }
 
+struct RiskSummaryCardView: View {
+    @Environment(\.appDensity) private var appDensity
+    let report: DomainReport
+
+    private var topFactors: [RiskFactor] {
+        Array(report.riskAssessment.factors.prefix(3))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
+            SectionTitleView(title: "Risk")
+            CardView(allowsHorizontalScroll: false) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(report.riskAssessment.score)")
+                            .font(appDensity.font(.largeTitle, weight: .bold))
+                            .foregroundStyle(levelColor)
+                        Text(report.riskAssessment.level.title)
+                            .font(appDensity.font(.caption))
+                            .foregroundStyle(levelColor)
+                    }
+                    Spacer()
+                    Text("Deterministic")
+                        .font(appDensity.font(.caption2))
+                        .foregroundStyle(.secondary)
+                }
+
+                if topFactors.isEmpty {
+                    Text("No major risk factors identified")
+                        .font(appDensity.font(.caption))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(topFactors.enumerated()), id: \.offset) { _, factor in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(factorColor(factor.impact))
+                                .frame(width: 8, height: 8)
+                                .padding(.top, 5)
+                            Text(factor.description)
+                                .font(appDensity.font(.caption))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var levelColor: Color {
+        switch report.riskAssessment.level {
+        case .low:
+            return .green
+        case .medium:
+            return .yellow
+        case .high:
+            return .red
+        }
+    }
+
+    private func factorColor(_ impact: RiskImpact) -> Color {
+        switch impact {
+        case .positive:
+            return .green
+        case .neutral:
+            return .secondary
+        case .negative:
+            return .red
+        }
+    }
+}
+
+struct InsightsSummaryCardView: View {
+    @Environment(\.appDensity) private var appDensity
+    let insights: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
+            SectionTitleView(title: "Insights")
+            CardView(allowsHorizontalScroll: false) {
+                if insights.isEmpty {
+                    Text("No deterministic insights triggered")
+                        .font(appDensity.font(.caption))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(insights.enumerated()), id: \.offset) { _, insight in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "sparkline")
+                                .font(appDensity.font(.caption2))
+                                .foregroundStyle(.cyan)
+                                .padding(.top, 2)
+                            Text(insight)
+                                .font(appDensity.font(.caption))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct StickyLookupSummaryView: View {
     @Environment(\.appDensity) private var appDensity
 
@@ -791,6 +902,13 @@ struct DomainChangeSummaryView: View {
                     .padding(.vertical, 4)
                     .background((summary.hasChanges ? severityColor(summary.severity) : .secondary).opacity(0.16))
                     .clipShape(Capsule())
+                Text(summary.impactClassification.title.uppercased())
+                    .font(appDensity.font(.caption2))
+                    .foregroundStyle(impactColor(summary.impactClassification))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(impactColor(summary.impactClassification).opacity(0.16))
+                    .clipShape(Capsule())
                 Text(summary.generatedAt, style: .time)
                     .font(appDensity.font(.caption2))
                     .foregroundStyle(.secondary)
@@ -822,6 +940,12 @@ struct DomainChangeSummaryView: View {
                             }
                         }
 
+                        if let riskScoreDelta = summary.riskScoreDelta {
+                            Text("Risk delta: \(riskScoreDelta >= 0 ? "+" : "")\(riskScoreDelta)")
+                                .font(appDensity.font(.caption2))
+                                .foregroundStyle(riskScoreDelta > 0 ? .orange : .secondary)
+                        }
+
                         if let contextNote = summary.contextNote {
                             Text(contextNote)
                                 .font(appDensity.font(.caption2))
@@ -843,6 +967,17 @@ struct DomainChangeSummaryView: View {
         case .medium:
             return .yellow
         case .high:
+            return .red
+        }
+    }
+
+    private func impactColor(_ impact: ChangeImpactClassification) -> Color {
+        switch impact {
+        case .informational:
+            return .secondary
+        case .warning:
+            return .yellow
+        case .critical:
             return .red
         }
     }
@@ -1215,6 +1350,7 @@ struct SubdomainsSectionView: View {
     @Environment(\.appDensity) private var appDensity
     @Binding var isCollapsed: Bool
     let rows: [SubdomainRowViewData]
+    let groups: [SubdomainGroup]
     let loading: Bool
     let error: String?
     let provenance: SectionProvenance?
@@ -1235,6 +1371,22 @@ struct SubdomainsSectionView: View {
                             .padding(.top, 4)
                     }
                 } else {
+                    if !groups.isEmpty {
+                        Text("Groups")
+                            .font(appDensity.font(.caption2))
+                            .foregroundStyle(.secondary)
+                        ForEach(groups) { group in
+                            HStack {
+                                Text("\(group.label).*")
+                                    .font(appDensity.font(.caption))
+                                    .foregroundStyle(.cyan)
+                                Spacer()
+                                Text("\(group.subdomains.count)")
+                                    .font(appDensity.font(.caption2))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     ForEach(rows) { row in
                         HStack(spacing: 8) {
                             Text(row.hostname)
@@ -1266,6 +1418,7 @@ struct SubdomainsSectionView: View {
 struct DNSSectionView: View {
     @Binding var isCollapsed: Bool
     let dnssecLabel: String?
+    let patternSummary: DNSPatternSummary?
     let sections: [DNSRecordSectionViewData]
     let ptrMessage: SectionMessageViewData?
     let loading: Bool
@@ -1283,6 +1436,16 @@ struct DNSSectionView: View {
                 if dnsProvenance != nil {
                     CardView(allowsHorizontalScroll: false) {
                         SectionTrustMetadataView(provenance: dnsProvenance, confidence: nil)
+                        if let patternSummary {
+                            if !patternSummary.providers.isEmpty {
+                                MessageRowView(text: "Providers: \(patternSummary.providers.joined(separator: ", "))", isError: false)
+                            }
+                            if !patternSummary.patterns.isEmpty {
+                                ForEach(Array(patternSummary.patterns.enumerated()), id: \.offset) { _, pattern in
+                                    MessageRowView(text: pattern, isError: false)
+                                }
+                            }
+                        }
                     }
                 }
                 ForEach(sections) { section in
@@ -1332,6 +1495,7 @@ struct WebSectionView: View {
     @Binding var isCollapsed: Bool
     let certificateRows: [InfoRowViewData]
     let sslInfo: SSLCertificateInfo?
+    let tlsSummary: WebResultSummary?
     let sslLoading: Bool
     let sslError: String?
     let tlsProvenance: SectionProvenance?
@@ -1354,9 +1518,17 @@ struct WebSectionView: View {
                         .font(appDensity.font(.subheadline, weight: .semibold))
                         .foregroundStyle(.cyan)
                     Spacer()
-                    AppStatusBadgeView(model: AppStatusFactory.tls(sslInfo: sslInfo, error: sslError))
+                    if !sslLoading {
+                        AppStatusBadgeView(model: AppStatusFactory.tls(sslInfo: sslInfo, error: sslError))
+                    }
                 }
                 SectionTrustMetadataView(provenance: tlsProvenance, confidence: nil)
+                if !sslLoading, let tlsSummary {
+                    LabeledValueRow(row: InfoRowViewData(label: "TLS Grade", value: tlsSummary.tlsGrade.rawValue, tone: tlsSummary.tlsGrade == .a ? .success : (tlsSummary.tlsGrade == .f ? .failure : .warning)))
+                    ForEach(Array(tlsSummary.tlsHighlights.enumerated()), id: \.offset) { _, highlight in
+                        MessageRowView(text: highlight, isError: isTLSHighlightError(highlight))
+                    }
+                }
                 if sslLoading {
                     ProgressView("Checking certificate…")
                         .appLoadingStyle()
@@ -1371,9 +1543,11 @@ struct WebSectionView: View {
                             .font(appDensity.font(.caption2))
                             .foregroundStyle(.secondary)
                         ForEach(sslInfo.subjectAltNames, id: \.self) { san in
-                            HStack(spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
                                 Text(san)
                                     .font(appDensity.font(.caption))
+                                    .lineLimit(nil)
+                                    .fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
                                 Spacer()
                                 AppCopyButton(value: san, label: "Copy certificate SAN")
@@ -1462,12 +1636,24 @@ struct WebSectionView: View {
             }
         }
     }
+
+    private func isTLSHighlightError(_ highlight: String) -> Bool {
+        let normalized = highlight.lowercased()
+        if normalized.contains("no weak tls indicators were detected") {
+            return false
+        }
+        return normalized.contains("expires")
+            || normalized.contains("weak")
+            || normalized.contains("tls 1.0")
+            || normalized.contains("tls 1.1")
+    }
 }
 
 struct EmailSectionView: View {
     @Environment(\.appDensity) private var appDensity
     @Binding var isCollapsed: Bool
     let rows: [EmailRowViewData]
+    let assessment: EmailSecuritySummary?
     let loading: Bool
     let provenance: SectionProvenance?
     let confidence: ConfidenceLevel?
@@ -1481,6 +1667,14 @@ struct EmailSectionView: View {
                     Spacer()
                     AppStatusBadgeView(model: AppStatusFactory.email(nil, error: error))
                         .opacity(loading ? 0 : 1)
+                }
+                if let assessment, let grade = assessment.grade {
+                    LabeledValueRow(row: InfoRowViewData(label: "Grade", value: grade.rawValue, tone: grade == .a ? .success : (grade == .f ? .failure : .warning)))
+                    if !assessment.reasons.isEmpty {
+                        Text(assessment.reasons.joined(separator: " | "))
+                            .font(appDensity.font(.caption2))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if loading {
                     ProgressView("Checking email records…")
@@ -1817,6 +2011,8 @@ struct MessageRowView: View {
         Label(text, systemImage: isError ? "exclamationmark.triangle.fill" : "info.circle")
             .font(appDensity.font(.caption))
             .foregroundStyle(isError ? .red : .secondary)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -1890,8 +2086,12 @@ struct LabeledValueRow: View {
                     Text(row.value)
                         .font(appDensity.font(.caption))
                         .foregroundStyle(ResultColors.color(for: row.tone))
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
                 Spacer(minLength: 6)
                 if !row.value.isEmpty, row.value != "Unavailable" {
                     AppCopyButton(value: row.value, label: "Copy \(row.label)")

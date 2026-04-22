@@ -25,6 +25,9 @@ struct DomainReport: Codable {
     let email: EmailSecuritySummary
     let network: NetworkSummary
     let subdomains: [String]
+    let subdomainGroups: [SubdomainGroup]
+    let riskAssessment: DomainRiskAssessment
+    let insights: [String]
     let changeSummary: DomainChangeSummary?
 }
 
@@ -36,6 +39,7 @@ struct DNSResultSummary: Codable {
     let primaryIP: String?
     let ptrRecord: String?
     let dnssecSigned: Bool?
+    let patternSummary: DNSPatternSummary
     let error: String?
     let ptrError: String?
 }
@@ -43,6 +47,8 @@ struct DNSResultSummary: Codable {
 struct WebResultSummary: Codable {
     let tls: SSLCertificateInfo?
     let tlsStatus: String
+    let tlsGrade: TLSGrade
+    let tlsHighlights: [String]
     let certificateWarningLevel: CertificateWarningLevel
     let hstsPreloaded: Bool?
     let headers: [HTTPHeader]
@@ -61,6 +67,8 @@ struct WebResultSummary: Codable {
 
 struct EmailSecuritySummary: Codable {
     let records: EmailSecurityResult?
+    let grade: EmailSecurityGrade?
+    let reasons: [String]
     let summary: String
     let error: String?
 }
@@ -81,6 +89,21 @@ struct NetworkSummary: Codable {
 struct DomainReportBuilder {
     func build(from snapshot: LookupSnapshot, previousSnapshot: LookupSnapshot? = nil) -> DomainReport {
         let primaryIP = primaryIPAddress(from: snapshot)
+        let analysis = DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
+        let changeSummary: DomainChangeSummary?
+        if let existingChangeSummary = snapshot.changeSummary, existingChangeSummary.riskAssessment != nil {
+            changeSummary = existingChangeSummary
+        } else {
+            changeSummary = previousSnapshot.map {
+                DomainDiffService.summary(
+                    from: $0,
+                    to: snapshot,
+                    generatedAt: snapshot.timestamp,
+                    riskAssessment: analysis.riskAssessment,
+                    insights: analysis.insights
+                )
+            }
+        }
 
         return DomainReport(
             domain: snapshot.domain,
@@ -110,12 +133,15 @@ struct DomainReportBuilder {
                 primaryIP: primaryIP,
                 ptrRecord: snapshot.ptrRecord,
                 dnssecSigned: dnssecSigned(from: snapshot),
+                patternSummary: analysis.dnsPatterns,
                 error: snapshot.dnsError,
                 ptrError: snapshot.ptrError
             ),
             web: WebResultSummary(
                 tls: snapshot.sslInfo,
                 tlsStatus: tlsStatus(from: snapshot),
+                tlsGrade: analysis.tlsAssessment.grade,
+                tlsHighlights: analysis.tlsAssessment.highlights,
                 certificateWarningLevel: DomainDiffService.certificateWarningLevel(for: snapshot),
                 hstsPreloaded: snapshot.hstsPreloaded,
                 headers: snapshot.httpHeaders,
@@ -133,7 +159,9 @@ struct DomainReportBuilder {
             ),
             email: EmailSecuritySummary(
                 records: snapshot.emailSecurity,
-                summary: emailSummary(from: snapshot),
+                grade: analysis.emailAssessment?.grade,
+                reasons: analysis.emailAssessment?.reasons ?? [],
+                summary: emailSummary(from: snapshot, assessment: analysis.emailAssessment),
                 error: snapshot.emailSecurityError
             ),
             network: NetworkSummary(
@@ -149,9 +177,10 @@ struct DomainReportBuilder {
                 portScanError: snapshot.portScanError
             ),
             subdomains: snapshot.subdomains.map(\.hostname),
-            changeSummary: snapshot.changeSummary ?? previousSnapshot.map {
-                DomainDiffService.summary(from: $0, to: snapshot, generatedAt: snapshot.timestamp)
-            }
+            subdomainGroups: analysis.subdomainGroups,
+            riskAssessment: analysis.riskAssessment,
+            insights: analysis.insights,
+            changeSummary: changeSummary
         )
     }
 
@@ -177,12 +206,13 @@ struct DomainReportBuilder {
         return "unavailable"
     }
 
-    private func emailSummary(from snapshot: LookupSnapshot) -> String {
+    private func emailSummary(from snapshot: LookupSnapshot, assessment: EmailSecurityAssessment?) -> String {
         guard let emailSecurity = snapshot.emailSecurity else {
             return snapshot.emailSecurityError ?? "Unavailable"
         }
 
         return [
+            "Grade \(assessment?.grade.rawValue ?? "?")",
             "SPF \(emailSecurity.spf.found ? "Yes" : "No")",
             "DMARC \(emailSecurity.dmarc.found ? "Yes" : "No")",
             "DKIM \(emailSecurity.dkim.found ? "Yes" : "No")",

@@ -96,6 +96,13 @@ private struct BatchLookupPayload {
     let snapshot: LookupSnapshot
 }
 
+private struct WorkflowExportPayload: Codable {
+    let workflowName: String
+    let generatedAt: Date
+    let workflowInsights: [WorkflowInsight]
+    let reports: [DomainReport]
+}
+
 @MainActor
 @Observable
 final class DomainViewModel {
@@ -194,6 +201,7 @@ final class DomainViewModel {
     private(set) var currentStatusMessage: String?
     private(set) var currentSnapshotTimestamp = Date()
     private(set) var currentHistoryEntryID: UUID?
+    private(set) var currentReport: DomainReport?
 
     private static let recentSearchesKey = "recentSearches"
     private static let maxRecent = 20
@@ -448,16 +456,28 @@ final class DomainViewModel {
         return history.first(where: { $0.id == currentHistoryEntryID })
     }
 
-    var currentReport: DomainReport? {
-        guard !searchedDomain.isEmpty else { return nil }
-        return reportBuilder.build(
-            from: currentSnapshot,
-            previousSnapshot: previousSnapshot(
-                for: searchedDomain,
-                trackedDomainID: currentTrackedDomain?.id,
-                replacingLatest: false
-            )
-        )
+    var currentRiskAssessment: DomainRiskAssessment? {
+        currentReport?.riskAssessment
+    }
+
+    var currentInsights: [String] {
+        currentReport?.insights ?? []
+    }
+
+    var currentSubdomainGroups: [SubdomainGroup] {
+        currentReport?.subdomainGroups ?? []
+    }
+
+    var currentDNSPatterns: DNSPatternSummary? {
+        currentReport?.dns.patternSummary
+    }
+
+    var currentEmailAssessment: EmailSecuritySummary? {
+        currentReport?.email
+    }
+
+    var currentTLSSummary: WebResultSummary? {
+        currentReport?.web
     }
 
     var summaryFields: [SummaryFieldViewData] {
@@ -684,6 +704,7 @@ final class DomainViewModel {
         currentDiffSections = []
         currentChangeSummary = nil
         ownershipDiff = []
+        currentReport = nil
         refreshingTrackedDomainID = nil
         clearBatchState()
         clearLookupState()
@@ -728,7 +749,10 @@ final class DomainViewModel {
                 quickStatus: "Cancelled",
                 summaryMessage: batchResults[index].summaryMessage,
                 changeSeverity: batchResults[index].changeSeverity,
+                changeClassification: batchResults[index].changeClassification,
                 certificateWarningLevel: batchResults[index].certificateWarningLevel,
+                riskScore: batchResults[index].riskScore,
+                riskLevel: batchResults[index].riskLevel,
                 timestamp: Date(),
                 status: .failed,
                 errorMessage: "Lookup cancelled"
@@ -918,22 +942,36 @@ final class DomainViewModel {
     }
 
     func exportWorkflowText(summary: WorkflowRunSummary, changedOnly: Bool) -> String {
-        DomainReportExporter.batchText(
-            for: workflowReports(from: summary, changedOnly: changedOnly),
+        let reports = workflowReports(from: summary, changedOnly: changedOnly)
+        let base = DomainReportExporter.batchText(
+            for: reports,
             title: "\(summary.workflowName) Workflow Export"
         )
+        guard !summary.workflowInsights.isEmpty else { return base }
+        let insightLines = summary.workflowInsights.map {
+            "- \($0.description): \($0.domainsInvolved.joined(separator: ", "))"
+        }
+        return ([ "\(summary.workflowName) Workflow Insights", String(repeating: "-", count: 32) ] + insightLines + ["", base]).joined(separator: "\n")
     }
 
     func exportWorkflowCSV(summary: WorkflowRunSummary, changedOnly: Bool) -> String {
-        DomainReportExporter.csv(for: workflowReports(from: summary, changedOnly: changedOnly))
+        DomainReportExporter.csv(
+            for: workflowReports(from: summary, changedOnly: changedOnly),
+            workflowInsights: summary.workflowInsights
+        )
     }
 
     func exportWorkflowJSONData(summary: WorkflowRunSummary, changedOnly: Bool) -> Data? {
-        try? DomainReportExporter.data(
-            for: workflowReports(from: summary, changedOnly: changedOnly),
-            format: .json,
-            title: "\(summary.workflowName) Workflow Export"
+        let payload = WorkflowExportPayload(
+            workflowName: summary.workflowName,
+            generatedAt: summary.generatedAt,
+            workflowInsights: summary.workflowInsights,
+            reports: workflowReports(from: summary, changedOnly: changedOnly)
         )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try? encoder.encode(payload)
     }
 
     private func performLookup(domain: String, lookupID: UUID) async -> HistoryEntry? {
@@ -963,9 +1001,17 @@ final class DomainViewModel {
         currentResultSource = snapshot.resultSource
         currentCachedSections = snapshot.cachedSections
         currentStatusMessage = snapshot.statusMessage
-        currentChangeSummary = snapshot.changeSummary
         currentDiffSections = []
         ownershipDiff = []
+        currentReport = reportBuilder.build(
+            from: snapshot,
+            previousSnapshot: previousSnapshot(
+                for: snapshot.domain,
+                trackedDomainID: snapshot.trackedDomainID ?? trackedDomain(for: snapshot.domain)?.id,
+                replacingLatest: false
+            )
+        )
+        currentChangeSummary = currentReport?.changeSummary ?? snapshot.changeSummary
 
         dnsSections = snapshot.dnsSections
         dnsError = snapshot.dnsError
@@ -1406,8 +1452,15 @@ final class DomainViewModel {
     private func saveHistoryEntry(from snapshot: LookupSnapshot, replaceLatest: Bool, updateCurrentState: Bool) -> HistoryEntry? {
         let trackedDomainID = snapshot.trackedDomainID ?? trackedDomain(for: snapshot.domain)?.id
         let previousSnapshot = previousSnapshot(for: snapshot.domain, trackedDomainID: trackedDomainID, replacingLatest: replaceLatest)
+        let analysis = DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
         let changeSummary = previousSnapshot.map {
-            DomainDiffService.summary(from: $0, to: snapshot, generatedAt: snapshot.timestamp)
+            DomainDiffService.summary(
+                from: $0,
+                to: snapshot,
+                generatedAt: snapshot.timestamp,
+                riskAssessment: analysis.riskAssessment,
+                insights: analysis.insights
+            )
         }
         let diffSections = previousSnapshot.map { DomainDiffService.diff(from: $0, to: snapshot) } ?? []
 
@@ -1415,6 +1468,7 @@ final class DomainViewModel {
             currentChangeSummary = changeSummary
             currentDiffSections = diffSections
             ownershipDiff = diffSections.first(where: { $0.title == "Ownership" })?.items.filter(\.hasChanges) ?? []
+            currentReport = reportBuilder.build(from: snapshot, previousSnapshot: previousSnapshot)
         }
 
         let entry = HistoryEntry(
@@ -1664,6 +1718,7 @@ final class DomainViewModel {
         currentStatusMessage = nil
         currentDiffSections = []
         currentChangeSummary = nil
+        currentReport = nil
         ownershipDiff = []
         clearLookupState()
         setAllLoadingStates(true)
@@ -1807,11 +1862,14 @@ final class DomainViewModel {
             }
         }
         let certificateWarningLevel = DomainDiffService.certificateWarningLevel(for: payload.snapshot)
+        let riskAssessment = DomainInsightEngine.analyze(snapshot: payload.snapshot).riskAssessment
         let quickStatus: String
         if entry?.changeSummary?.hasChanges == true {
-            quickStatus = entry?.changeSummary?.severity == .high ? "High" : "Changed"
+            quickStatus = entry?.changeSummary?.impactClassification == .critical ? "Critical" : (entry?.changeSummary?.severity == .high ? "High" : "Changed")
         } else if certificateWarningLevel != .none {
             quickStatus = certificateWarningLevel == .critical ? "Critical" : "Warning"
+        } else if riskAssessment.level == .high {
+            quickStatus = "High"
         } else {
             quickStatus = "Unchanged"
         }
@@ -1834,9 +1892,14 @@ final class DomainViewModel {
         refreshingTrackedDomainID = nil
         batchTask = nil
 
-        let changedCount = batchResults.filter { $0.quickStatus == "Changed" || $0.quickStatus == "High" }.count
+        let changedCount = batchResults.filter { $0.quickStatus == "Changed" || $0.quickStatus == "High" || $0.quickStatus == "Critical" }.count
         let unchangedCount = batchResults.filter { $0.quickStatus == "Unchanged" && $0.status == .completed }.count
-        let warningCount = batchResults.filter { $0.certificateWarningLevel != .none }.count
+        let warningCount = batchResults.filter {
+            $0.certificateWarningLevel != .none
+                || $0.changeClassification == .warning
+                || $0.changeClassification == .critical
+                || $0.riskLevel == .high
+        }.count
 
         let summary = BatchSweepSummary(
             source: source,
@@ -1855,6 +1918,10 @@ final class DomainViewModel {
         latestBatchSweepSummary = summary
 
         if source == .workflow, let activeWorkflowRunID, let activeWorkflowRunName {
+            let workflowReports: [DomainReport] = summary.results.compactMap { result in
+                guard let entry = historyEntry(for: result) else { return nil }
+                return report(for: entry)
+            }
             latestWorkflowRunSummary = WorkflowRunSummary(
                 workflowID: activeWorkflowRunID,
                 workflowName: activeWorkflowRunName,
@@ -1863,6 +1930,7 @@ final class DomainViewModel {
                 unchangedDomains: unchangedCount,
                 warningDomains: warningCount,
                 results: summary.results,
+                workflowInsights: DomainInsightEngine.workflowInsights(for: workflowReports),
                 generatedAt: summary.generatedAt
             )
         }
@@ -1896,7 +1964,10 @@ final class DomainViewModel {
             quickStatus: quickStatus,
             summaryMessage: entry?.changeSummary?.message,
             changeSeverity: entry?.changeSummary?.severity,
+            changeClassification: entry?.changeSummary?.impactClassification,
             certificateWarningLevel: entry.map { DomainDiffService.certificateWarningLevel(for: $0.snapshot) } ?? batchResults[index].certificateWarningLevel,
+            riskScore: entry.map { $0.changeSummary?.riskAssessment?.score ?? report(for: $0).riskAssessment.score },
+            riskLevel: entry.map { $0.changeSummary?.riskAssessment?.level ?? report(for: $0).riskAssessment.level },
             timestamp: entry?.timestamp ?? Date(),
             status: status,
             errorMessage: errorMessage
@@ -1956,6 +2027,7 @@ final class DomainViewModel {
         currentResultSource = .live
         currentCachedSections = []
         currentStatusMessage = nil
+        currentReport = nil
     }
 
     private func setAllLoadingStates(_ loading: Bool) {

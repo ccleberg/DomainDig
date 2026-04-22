@@ -181,29 +181,41 @@ struct DomainChangeSummary: Codable, Equatable {
     let changedSections: [String]
     let message: String
     let severity: ChangeSeverity
+    let impactClassification: ChangeImpactClassification
     let generatedAt: Date
     let observedFacts: [String]
     let inferredConclusions: [String]
     let contextNote: String?
+    let riskAssessment: DomainRiskAssessment?
+    let insights: [String]
+    let riskScoreDelta: Int?
 
     init(
         hasChanges: Bool,
         changedSections: [String],
         message: String,
         severity: ChangeSeverity,
+        impactClassification: ChangeImpactClassification,
         generatedAt: Date,
         observedFacts: [String] = [],
         inferredConclusions: [String] = [],
-        contextNote: String? = nil
+        contextNote: String? = nil,
+        riskAssessment: DomainRiskAssessment? = nil,
+        insights: [String] = [],
+        riskScoreDelta: Int? = nil
     ) {
         self.hasChanges = hasChanges
         self.changedSections = changedSections
         self.message = message
         self.severity = severity
+        self.impactClassification = impactClassification
         self.generatedAt = generatedAt
         self.observedFacts = observedFacts
         self.inferredConclusions = inferredConclusions
         self.contextNote = contextNote
+        self.riskAssessment = riskAssessment
+        self.insights = insights
+        self.riskScoreDelta = riskScoreDelta
     }
 
     init(from decoder: Decoder) throws {
@@ -212,11 +224,16 @@ struct DomainChangeSummary: Codable, Equatable {
         changedSections = try container.decodeIfPresent([String].self, forKey: .changedSections) ?? []
         generatedAt = try container.decode(Date.self, forKey: .generatedAt)
         severity = try container.decodeIfPresent(ChangeSeverity.self, forKey: .severity) ?? (hasChanges ? .medium : .low)
+        impactClassification = try container.decodeIfPresent(ChangeImpactClassification.self, forKey: .impactClassification)
+            ?? (severity == .high ? .critical : (hasChanges ? .warning : .informational))
         message = try container.decodeIfPresent(String.self, forKey: .message)
             ?? (changedSections.isEmpty ? "No meaningful changes" : changedSections.joined(separator: " • "))
         observedFacts = try container.decodeIfPresent([String].self, forKey: .observedFacts) ?? []
         inferredConclusions = try container.decodeIfPresent([String].self, forKey: .inferredConclusions) ?? []
         contextNote = try container.decodeIfPresent(String.self, forKey: .contextNote)
+        riskAssessment = try container.decodeIfPresent(DomainRiskAssessment.self, forKey: .riskAssessment)
+        insights = try container.decodeIfPresent([String].self, forKey: .insights) ?? []
+        riskScoreDelta = try container.decodeIfPresent(Int.self, forKey: .riskScoreDelta)
     }
 }
 
@@ -243,7 +260,10 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
     let quickStatus: String
     let summaryMessage: String?
     let changeSeverity: ChangeSeverity?
+    let changeClassification: ChangeImpactClassification?
     let certificateWarningLevel: CertificateWarningLevel
+    let riskScore: Int?
+    let riskLevel: RiskLevel?
     let timestamp: Date
     let status: BatchLookupStatus
     let errorMessage: String?
@@ -258,7 +278,10 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
         quickStatus: String,
         summaryMessage: String? = nil,
         changeSeverity: ChangeSeverity? = nil,
+        changeClassification: ChangeImpactClassification? = nil,
         certificateWarningLevel: CertificateWarningLevel = .none,
+        riskScore: Int? = nil,
+        riskLevel: RiskLevel? = nil,
         timestamp: Date,
         status: BatchLookupStatus,
         errorMessage: String? = nil
@@ -272,7 +295,10 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
         self.quickStatus = quickStatus
         self.summaryMessage = summaryMessage
         self.changeSeverity = changeSeverity
+        self.changeClassification = changeClassification
         self.certificateWarningLevel = certificateWarningLevel
+        self.riskScore = riskScore
+        self.riskLevel = riskLevel
         self.timestamp = timestamp
         self.status = status
         self.errorMessage = errorMessage
@@ -281,7 +307,9 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
     var hasMeaningfulChange: Bool {
         quickStatus == "Changed"
             || quickStatus == "High"
+            || quickStatus == "Critical"
             || certificateWarningLevel != .none
+            || riskLevel == .high
             || status == .failed
     }
 }
@@ -331,6 +359,7 @@ struct WorkflowRunSummary: Identifiable, Equatable {
     let unchangedDomains: Int
     let warningDomains: Int
     let results: [BatchLookupResult]
+    let workflowInsights: [WorkflowInsight]
     let generatedAt: Date
 }
 
