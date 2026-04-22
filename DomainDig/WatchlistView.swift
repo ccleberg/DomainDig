@@ -9,12 +9,20 @@ struct WatchlistView: View {
             if viewModel.batchLookupSource == .watchlistRefresh, (!viewModel.batchResults.isEmpty || viewModel.batchLookupRunning) {
                 Section("Refresh Progress") {
                     VStack(alignment: .leading, spacing: 8) {
-                        if viewModel.batchLookupRunning {
-                            ProgressView(value: Double(viewModel.batchCompletedCount), total: Double(max(viewModel.batchTotalCount, 1)))
-                                .tint(.cyan)
+                        ProgressView(value: Double(viewModel.batchCompletedCount), total: Double(max(viewModel.batchTotalCount, 1)))
+                            .tint(.cyan)
+                        HStack {
                             Text(viewModel.batchProgressLabel)
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
+                            Spacer()
+                            if viewModel.batchLookupRunning {
+                                Button("Cancel") {
+                                    viewModel.cancelBatchLookup()
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.system(.caption2, design: .monospaced))
+                            }
                         }
 
                         ForEach(viewModel.batchResults.prefix(5)) { result in
@@ -129,9 +137,10 @@ struct WatchlistView: View {
                             }
                         }
 
-                        Button("Refresh All") {
+                        Button(viewModel.batchLookupRunning ? "Check All Running" : "Check All") {
                             viewModel.refreshAllTrackedDomains()
                         }
+                        .disabled(viewModel.batchLookupRunning)
 
                         Button("Export TXT") {
                             shareTrackedDomains(asCSV: false)
@@ -151,7 +160,17 @@ struct WatchlistView: View {
         .onChange(of: viewModel.rerunNavigationToken) { _, _ in
             dismiss()
         }
+        .sheet(item: batchSummaryBinding) { summary in
+            BatchSweepSummaryView(viewModel: viewModel, summary: summary)
+        }
         .preferredColorScheme(.dark)
+    }
+
+    private var batchSummaryBinding: Binding<BatchSweepSummary?> {
+        Binding(
+            get: { viewModel.latestBatchSweepSummary },
+            set: { viewModel.latestBatchSweepSummary = $0 }
+        )
     }
 
     private func deleteFilteredTrackedDomains(at offsets: IndexSet) {
@@ -197,13 +216,15 @@ struct WatchlistRowView: View {
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
 
+            indicatorRow
+
             if let note = trackedDomain.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
                 Text(note)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else if let summary = trackedDomain.lastChangeSummary {
-                Text(summary.changedSections.isEmpty ? "No meaningful changes detected." : summary.changedSections.joined(separator: " • "))
+                Text(summary.message)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -268,6 +289,43 @@ struct WatchlistRowView: View {
             return .yellow.opacity(0.16)
         case .unknown, .none:
             return Color(.systemGray5).opacity(0.6)
+        }
+    }
+
+    @ViewBuilder
+    private var indicatorRow: some View {
+        HStack(spacing: 8) {
+            if let severity = trackedDomain.lastChangeSeverity, severity >= .medium {
+                Label(severity.title, systemImage: severity == .high ? "exclamationmark.circle.fill" : "circle.fill")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(severity == .high ? .red : .yellow)
+            } else {
+                Label("Stable", systemImage: "circle.fill")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            if trackedDomain.certificateWarningLevel != .none {
+                Text(certificateLabel)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(trackedDomain.certificateWarningLevel == .critical ? .red : .yellow)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((trackedDomain.certificateWarningLevel == .critical ? Color.red : Color.yellow).opacity(0.16))
+                    .clipShape(Capsule())
+            }
+        }
+    }
+
+    private var certificateLabel: String {
+        let days = trackedDomain.certificateDaysRemaining.map { "\($0)d" } ?? "Soon"
+        switch trackedDomain.certificateWarningLevel {
+        case .critical:
+            return "Cert \(days)"
+        case .warning:
+            return "Warn \(days)"
+        case .none:
+            return ""
         }
     }
 }

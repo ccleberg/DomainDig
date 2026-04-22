@@ -48,10 +48,74 @@ struct WatchedDomain: Codable, Identifiable {
     }
 }
 
+enum ChangeSeverity: Int, Codable, CaseIterable, Comparable {
+    case low
+    case medium
+    case high
+
+    static func < (lhs: ChangeSeverity, rhs: ChangeSeverity) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .low:
+            return "Low"
+        case .medium:
+            return "Medium"
+        case .high:
+            return "High"
+        }
+    }
+}
+
+enum CertificateWarningLevel: String, Codable {
+    case none
+    case warning
+    case critical
+
+    var title: String {
+        switch self {
+        case .none:
+            return "Healthy"
+        case .warning:
+            return "Warning"
+        case .critical:
+            return "Critical"
+        }
+    }
+}
+
 struct DomainChangeSummary: Codable, Equatable {
     let hasChanges: Bool
     let changedSections: [String]
+    let message: String
+    let severity: ChangeSeverity
     let generatedAt: Date
+
+    init(
+        hasChanges: Bool,
+        changedSections: [String],
+        message: String,
+        severity: ChangeSeverity,
+        generatedAt: Date
+    ) {
+        self.hasChanges = hasChanges
+        self.changedSections = changedSections
+        self.message = message
+        self.severity = severity
+        self.generatedAt = generatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hasChanges = try container.decodeIfPresent(Bool.self, forKey: .hasChanges) ?? false
+        changedSections = try container.decodeIfPresent([String].self, forKey: .changedSections) ?? []
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        severity = try container.decodeIfPresent(ChangeSeverity.self, forKey: .severity) ?? (hasChanges ? .medium : .low)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+            ?? (changedSections.isEmpty ? "No meaningful changes" : changedSections.joined(separator: " • "))
+    }
 }
 
 enum BatchLookupSource: String, Codable {
@@ -73,6 +137,9 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
     let availability: DomainAvailabilityStatus?
     let primaryIP: String?
     let quickStatus: String
+    let summaryMessage: String?
+    let changeSeverity: ChangeSeverity?
+    let certificateWarningLevel: CertificateWarningLevel
     let timestamp: Date
     let status: BatchLookupStatus
     let errorMessage: String?
@@ -84,6 +151,9 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
         availability: DomainAvailabilityStatus?,
         primaryIP: String?,
         quickStatus: String,
+        summaryMessage: String? = nil,
+        changeSeverity: ChangeSeverity? = nil,
+        certificateWarningLevel: CertificateWarningLevel = .none,
         timestamp: Date,
         status: BatchLookupStatus,
         errorMessage: String? = nil
@@ -94,10 +164,24 @@ struct BatchLookupResult: Identifiable, Codable, Equatable {
         self.availability = availability
         self.primaryIP = primaryIP
         self.quickStatus = quickStatus
+        self.summaryMessage = summaryMessage
+        self.changeSeverity = changeSeverity
+        self.certificateWarningLevel = certificateWarningLevel
         self.timestamp = timestamp
         self.status = status
         self.errorMessage = errorMessage
     }
+}
+
+struct BatchSweepSummary: Identifiable, Equatable {
+    let id = UUID()
+    let source: BatchLookupSource
+    let totalDomains: Int
+    let changedDomains: Int
+    let unchangedDomains: Int
+    let warningDomains: Int
+    let results: [BatchLookupResult]
+    let generatedAt: Date
 }
 
 enum HistoryDateFilter: String, CaseIterable, Identifiable {
@@ -213,6 +297,9 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
     var lastKnownAvailability: DomainAvailabilityStatus?
     var lastSnapshotID: UUID?
     var lastChangeSummary: DomainChangeSummary?
+    var lastChangeSeverity: ChangeSeverity?
+    var certificateWarningLevel: CertificateWarningLevel
+    var certificateDaysRemaining: Int?
 
     init(
         id: UUID = UUID(),
@@ -223,7 +310,10 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
         isPinned: Bool = false,
         lastKnownAvailability: DomainAvailabilityStatus? = nil,
         lastSnapshotID: UUID? = nil,
-        lastChangeSummary: DomainChangeSummary? = nil
+        lastChangeSummary: DomainChangeSummary? = nil,
+        lastChangeSeverity: ChangeSeverity? = nil,
+        certificateWarningLevel: CertificateWarningLevel = .none,
+        certificateDaysRemaining: Int? = nil
     ) {
         self.id = id
         self.domain = domain
@@ -234,6 +324,25 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
         self.lastKnownAvailability = lastKnownAvailability
         self.lastSnapshotID = lastSnapshotID
         self.lastChangeSummary = lastChangeSummary
+        self.lastChangeSeverity = lastChangeSeverity
+        self.certificateWarningLevel = certificateWarningLevel
+        self.certificateDaysRemaining = certificateDaysRemaining
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        domain = try container.decode(String.self, forKey: .domain)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        lastKnownAvailability = try container.decodeIfPresent(DomainAvailabilityStatus.self, forKey: .lastKnownAvailability)
+        lastSnapshotID = try container.decodeIfPresent(UUID.self, forKey: .lastSnapshotID)
+        lastChangeSummary = try container.decodeIfPresent(DomainChangeSummary.self, forKey: .lastChangeSummary)
+        lastChangeSeverity = try container.decodeIfPresent(ChangeSeverity.self, forKey: .lastChangeSeverity) ?? lastChangeSummary?.severity
+        certificateWarningLevel = try container.decodeIfPresent(CertificateWarningLevel.self, forKey: .certificateWarningLevel) ?? .none
+        certificateDaysRemaining = try container.decodeIfPresent(Int.self, forKey: .certificateDaysRemaining)
     }
 }
 

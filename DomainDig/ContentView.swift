@@ -308,6 +308,13 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Spacer()
+                if viewModel.batchLookupRunning {
+                    Button("Cancel") {
+                        viewModel.cancelBatchLookup()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(.caption, design: .monospaced))
+                }
                 if !viewModel.currentBatchResultEntries.isEmpty {
                     Menu {
                         Button("Export Batch TXT") {
@@ -455,18 +462,36 @@ struct DomainChangeSummaryView: View {
     var body: some View {
         CardView(allowsHorizontalScroll: false) {
             HStack {
-                Label(summary.hasChanges ? "Changed" : "Unchanged", systemImage: summary.hasChanges ? "arrow.triangle.2.circlepath" : "checkmark.circle")
+                Label(summary.hasChanges ? "Changed" : "Stable", systemImage: summary.hasChanges ? "arrow.triangle.2.circlepath" : "checkmark.circle")
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(summary.hasChanges ? .yellow : .green)
+                    .foregroundStyle(summary.hasChanges ? severityColor(summary.severity) : .green)
                 Spacer()
+                Text(summary.severity.title.uppercased())
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(summary.hasChanges ? severityColor(summary.severity) : .secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((summary.hasChanges ? severityColor(summary.severity) : .secondary).opacity(0.16))
+                    .clipShape(Capsule())
                 Text(summary.generatedAt, style: .time)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
 
-            Text(summary.changedSections.isEmpty ? "No meaningful changes detected." : summary.changedSections.joined(separator: " • "))
+            Text(summary.message)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.primary)
+        }
+    }
+
+    private func severityColor(_ severity: ChangeSeverity) -> Color {
+        switch severity {
+        case .low:
+            return .secondary
+        case .medium:
+            return .yellow
+        case .high:
+            return .red
         }
     }
 }
@@ -475,25 +500,44 @@ struct DomainDiffView: View {
     let title: String
     let sections: [DomainDiffSection]
     let showsUnchanged: Bool
+
     @State private var collapsedSections = Set<UUID>()
+    @State private var showsLowSeverity = false
 
     private var filteredSections: [DomainDiffSection] {
-        guard showsUnchanged else {
-            return sections
-                .map { section in
-                    DomainDiffSection(
-                        title: section.title,
-                        items: section.items.filter(\.hasChanges)
-                    )
+        sections
+            .map { section in
+                let items = section.items.filter { item in
+                    if !showsUnchanged, !item.hasChanges {
+                        return false
+                    }
+                    if showsLowSeverity {
+                        return true
+                    }
+                    return item.severity >= .medium || (showsUnchanged && item.changeType == .unchanged)
                 }
-                .filter { !$0.items.isEmpty }
-        }
-        return sections
+                return DomainDiffSection(title: section.title, items: items)
+            }
+            .filter { !$0.items.isEmpty }
+    }
+
+    private var hasLowSeverityChanges: Bool {
+        sections.flatMap(\.items).contains { $0.hasChanges && $0.severity == .low }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionTitleView(title: title)
+            HStack {
+                SectionTitleView(title: title)
+                Spacer()
+                if hasLowSeverityChanges {
+                    Button(showsLowSeverity ? "Hide Low" : "Show Low") {
+                        showsLowSeverity.toggle()
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(.caption, design: .monospaced))
+                }
+            }
             if filteredSections.isEmpty {
                 MessageCardView(text: "No comparison data available", isError: false)
             } else {
@@ -509,12 +553,12 @@ struct DomainDiffView: View {
                                             .font(.system(.caption, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                         Spacer()
-                                        Text(changeLabel(for: item.changeType))
+                                        Text("\(item.severity.title) • \(changeLabel(for: item.changeType))")
                                             .font(.system(.caption2, design: .monospaced))
-                                            .foregroundStyle(changeColor(for: item.changeType))
+                                            .foregroundStyle(changeColor(for: item))
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 4)
-                                            .background(changeColor(for: item.changeType).opacity(0.16))
+                                            .background(changeColor(for: item).opacity(0.16))
                                             .clipShape(Capsule())
                                     }
 
@@ -543,7 +587,7 @@ struct DomainDiffView: View {
                                     }
                                 }
                                 .padding(10)
-                                .background(item.hasChanges ? changeColor(for: item.changeType).opacity(0.08) : Color(.systemGray6).opacity(0.25))
+                                .background(item.hasChanges ? changeColor(for: item).opacity(0.08) : Color(.systemGray6).opacity(0.25))
                                 .cornerRadius(8)
                             }
                         } label: {
@@ -551,11 +595,11 @@ struct DomainDiffView: View {
                                 Text(section.title)
                                     .font(.system(.subheadline, design: .monospaced))
                                     .fontWeight(.semibold)
-                                    .foregroundStyle(.cyan)
+                                    .foregroundStyle(sectionColor(section))
                                 Spacer()
-                                Text(section.hasChanges ? "Changed" : "Unchanged")
+                                Text(section.severity.title)
                                     .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(section.hasChanges ? .yellow : .secondary)
+                                    .foregroundStyle(sectionColor(section))
                             }
                         }
                     }
@@ -577,16 +621,29 @@ struct DomainDiffView: View {
         }
     }
 
-    private func changeColor(for changeType: DiffChangeType) -> Color {
-        switch changeType {
-        case .added:
-            return .green
-        case .removed:
-            return .red
-        case .changed:
-            return .yellow
-        case .unchanged:
+    private func changeColor(for item: DomainDiffItem) -> Color {
+        if item.changeType == .unchanged {
             return .secondary
+        }
+
+        switch item.severity {
+        case .low:
+            return .blue
+        case .medium:
+            return .yellow
+        case .high:
+            return .red
+        }
+    }
+
+    private func sectionColor(_ section: DomainDiffSection) -> Color {
+        switch section.severity {
+        case .low:
+            return .blue
+        case .medium:
+            return .yellow
+        case .high:
+            return .red
         }
     }
 

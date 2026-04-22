@@ -65,23 +65,27 @@ struct SSLCheckService {
         let validFrom: Date
         let validUntil: Date
 
-        if let notBefore = SecCertificateCopyNotValidBeforeDate(leaf) as Date? {
-            validFrom = notBefore
-        } else {
-            validFrom = Date.distantPast
-        }
+        let derData = SecCertificateCopyData(leaf) as Data
+        let parsed = DERCertificateParser.parse(derData)
 
-        if let notAfter = SecCertificateCopyNotValidAfterDate(leaf) as Date? {
-            validUntil = notAfter
+        if #available(iOS 18.0, *) {
+            if let notBefore = SecCertificateCopyNotValidBeforeDate(leaf) as Date? {
+                validFrom = notBefore
+            } else {
+                validFrom = parsed.notBefore ?? Date.distantPast
+            }
+
+            if let notAfter = SecCertificateCopyNotValidAfterDate(leaf) as Date? {
+                validUntil = notAfter
+            } else {
+                validUntil = parsed.notAfter ?? Date.distantFuture
+            }
         } else {
-            validUntil = Date.distantFuture
+            validFrom = parsed.notBefore ?? Date.distantPast
+            validUntil = parsed.notAfter ?? Date.distantFuture
         }
 
         let daysUntilExpiry = Calendar.current.dateComponents([.day], from: Date(), to: validUntil).day ?? 0
-
-        // Parse the DER-encoded certificate to extract SANs and Issuer
-        let derData = SecCertificateCopyData(leaf) as Data
-        let parsed = DERCertificateParser.parse(derData)
 
         let sans = parsed.subjectAltNames.isEmpty ? [commonName] : parsed.subjectAltNames
 
@@ -116,6 +120,7 @@ struct SSLCheckService {
             chain: chain
         )
     }
+
 }
 
 fileprivate struct TLSMetadata {
@@ -133,6 +138,8 @@ private enum DERCertificateParser {
     struct Result {
         var issuerCommonName: String?
         var subjectAltNames: [String] = []
+        var notBefore: Date?
+        var notAfter: Date?
     }
 
     static func parse(_ data: Data) -> Result {
@@ -171,8 +178,11 @@ private enum DERCertificateParser {
             offset = issuerSeq.contentStart + issuerSeq.length
         }
 
-        // Skip validity
+        // Validity
         if let validity = readTagAndLength(bytes, offset: offset) {
+            let (notBefore, notAfter) = extractValidity(bytes, sequenceStart: validity.contentStart, length: validity.length)
+            result.notBefore = notBefore
+            result.notAfter = notAfter
             offset = validity.contentStart + validity.length
         }
 
@@ -285,6 +295,43 @@ private enum DERCertificateParser {
             pos = extEnd
         }
         return sans
+    }
+
+    private static func extractValidity(_ bytes: [UInt8], sequenceStart: Int, length: Int) -> (Date?, Date?) {
+        let end = sequenceStart + length
+        var position = sequenceStart
+        var dates: [Date] = []
+
+        while position < end, dates.count < 2 {
+            guard let timeTL = readTagAndLength(bytes, offset: position) else { break }
+            let raw = String(bytes: bytes[timeTL.contentStart..<timeTL.contentStart + timeTL.length], encoding: .ascii)
+            if let raw {
+                dates.append(parseASN1Time(raw))
+            }
+            position = timeTL.contentStart + timeTL.length
+        }
+
+        let notBefore = dates.indices.contains(0) ? dates[0] : nil
+        let notAfter = dates.indices.contains(1) ? dates[1] : nil
+        return (notBefore, notAfter)
+    }
+
+    private static func parseASN1Time(_ string: String) -> Date {
+        let utcFormatter = DateFormatter()
+        utcFormatter.locale = Locale(identifier: "en_US_POSIX")
+        utcFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        utcFormatter.dateFormat = "yyMMddHHmmss'Z'"
+
+        if let date = utcFormatter.date(from: string) {
+            return date
+        }
+
+        let generalizedFormatter = DateFormatter()
+        generalizedFormatter.locale = Locale(identifier: "en_US_POSIX")
+        generalizedFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        generalizedFormatter.dateFormat = "yyyyMMddHHmmss'Z'"
+
+        return generalizedFormatter.date(from: string) ?? Date.distantFuture
     }
 
     private struct TLV {

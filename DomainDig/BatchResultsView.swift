@@ -75,6 +75,12 @@ struct BatchResultRowView: View {
             .font(.system(.caption2, design: .monospaced))
             .foregroundStyle(.secondary)
 
+            if let summaryMessage = result.summaryMessage {
+                Text(summaryMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
             if let errorMessage = result.errorMessage {
                 Text(errorMessage)
                     .font(.system(.caption2, design: .monospaced))
@@ -103,7 +109,10 @@ struct BatchResultRowView: View {
         case .running:
             return .cyan
         case .completed:
-            if result.quickStatus == "Changed" {
+            if result.changeSeverity == .high || result.certificateWarningLevel == .critical {
+                return .red
+            }
+            if result.changeSeverity == .medium || result.certificateWarningLevel == .warning {
                 return .yellow
             }
             return .green

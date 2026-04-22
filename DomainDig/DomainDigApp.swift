@@ -9,6 +9,10 @@ import SwiftUI
 
 @main
 struct DomainDigApp: App {
+    init() {
+        LocalNotificationService.shared.configureForegroundPresentation()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
