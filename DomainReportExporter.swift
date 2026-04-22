@@ -67,7 +67,9 @@ enum DomainReportExporter {
                 "TLS Status: \(report.web.tlsStatus)",
                 "HTTP: \(httpSummary(for: report))",
                 "Email: \(report.email.summary)",
-                "Subdomains: \(report.subdomains.count)"
+                "Subdomains: \(report.subdomains.count)",
+                "Extended Subdomains: \(report.extendedSubdomains.count)",
+                "External Price: \(report.domainPricing?.estimatedPrice ?? "Unavailable")"
             ]
         }
 
@@ -97,6 +99,7 @@ enum DomainReportExporter {
                 "Confidence: \(report.ownershipConfidence?.title ?? "N/A")",
                 "Created: \(ownershipDateLabel(report.ownership?.createdDate))",
                 "Expires: \(ownershipDateLabel(report.ownership?.expirationDate))",
+                "Registrant: \(report.ownership?.registrant ?? "Unavailable")",
                 "Nameservers: \(joined(report.ownership?.nameservers) ?? "Unavailable")",
                 "Status: \(joined(report.ownership?.status) ?? "Unavailable")",
                 "Abuse Contact: \(report.ownership?.abuseEmail ?? "Unavailable")"
@@ -110,6 +113,20 @@ enum DomainReportExporter {
                 _ = error
             }
             return ownershipLines
+        }
+
+        appendSection("Ownership History", to: &lines) {
+            guard !report.ownershipHistory.isEmpty else {
+                return ["No ownership history available"]
+            }
+
+            return report.ownershipHistory.map { event in
+                [
+                    textDateFormatter.string(from: event.date),
+                    event.summary,
+                    "source=\(event.source)"
+                ].joined(separator: " | ")
+            }
         }
 
         appendSection("DNS", to: &lines) {
@@ -137,6 +154,22 @@ enum DomainReportExporter {
                 }
             }
             return dnsLines
+        }
+
+        appendSection("DNS History", to: &lines) {
+            guard !report.dnsHistory.isEmpty else {
+                return ["No DNS history available"]
+            }
+
+            return report.dnsHistory.map { event in
+                [
+                    textDateFormatter.string(from: event.date),
+                    event.summary,
+                    "A=\(event.aRecords.joined(separator: " | ").nilIfEmpty ?? "-")",
+                    "NS=\(event.nameservers.joined(separator: " | ").nilIfEmpty ?? "-")",
+                    "source=\(event.source)"
+                ].joined(separator: " | ")
+            }
         }
 
         appendSection("Web", to: &lines) {
@@ -254,7 +287,26 @@ enum DomainReportExporter {
                 values.append("Groups: \(report.subdomainGroups.map { "\($0.label): \($0.subdomains.count)" }.joined(separator: " | "))")
             }
             values.append(contentsOf: report.subdomains.map { "- \($0)" })
+            if !report.extendedSubdomains.isEmpty {
+                values.append("Extended:")
+                values.append(contentsOf: report.extendedSubdomains.map { "- \($0)" })
+            }
             return values
+        }
+
+        appendSection("Pricing", to: &lines) {
+            guard let pricing = report.domainPricing else {
+                return ["External pricing unavailable"]
+            }
+
+            return [
+                "Estimated Price: \(pricing.estimatedPrice ?? "Unavailable")",
+                "Premium: \(pricing.premiumIndicator == true ? "Yes" : "No")",
+                "Resale: \(pricing.resaleSignal ?? "Unavailable")",
+                "Auction: \(pricing.auctionSignal ?? "Unavailable")",
+                "Source: \(pricing.source)",
+                "Collected: \(textDateFormatter.string(from: pricing.collectedAt))"
+            ]
         }
 
         appendSection("Changes", to: &lines) {
@@ -342,9 +394,18 @@ enum DomainReportExporter {
             "email_grade",
             "email_confidence",
             "subdomain_count",
+            "extended_subdomain_count",
             "subdomain_groups",
             "subdomain_confidence",
             "subdomains",
+            "extended_subdomains",
+            "ownership_history",
+            "dns_history",
+            "pricing_estimated",
+            "pricing_premium",
+            "pricing_resale_signal",
+            "pricing_auction_signal",
+            "pricing_source",
             "open_ports",
             "reachability_summary",
             "geolocation_summary",
@@ -368,12 +429,15 @@ enum DomainReportExporter {
             let httpStatus = report.web.statusCode.map(String.init) ?? ""
             let subdomainCount = String(report.subdomains.count)
             let subdomains = report.subdomains.joined(separator: " | ")
+            let extendedSubdomains = report.extendedSubdomains.joined(separator: " | ")
             let openPorts = report.network.openPorts.map(String.init).joined(separator: " | ")
             let riskFactors = report.riskAssessment.factors.map(\.description).joined(separator: " | ")
             let insights = report.insights.joined(separator: " | ")
             let dnsPatterns = report.dns.patternSummary.patterns.joined(separator: " | ")
             let tlsHighlights = report.web.tlsHighlights.joined(separator: " | ")
             let subdomainGroups = report.subdomainGroups.map { "\($0.label):\($0.subdomains.count)" }.joined(separator: " | ")
+            let ownershipHistory = report.ownershipHistory.map { "\($0.date.ISO8601Format()) \($0.summary)" }.joined(separator: " | ")
+            let dnsHistory = report.dnsHistory.map { "\($0.date.ISO8601Format()) \($0.summary)" }.joined(separator: " | ")
 
             return [
                 report.domain,
@@ -407,9 +471,18 @@ enum DomainReportExporter {
                 report.email.grade?.rawValue ?? "",
                 report.emailConfidence?.rawValue ?? "",
                 subdomainCount,
+                String(report.extendedSubdomains.count),
                 subdomainGroups,
                 report.subdomainConfidence?.rawValue ?? "",
                 subdomains,
+                extendedSubdomains,
+                ownershipHistory,
+                dnsHistory,
+                report.domainPricing?.estimatedPrice ?? "",
+                report.domainPricing?.premiumIndicator == true ? "true" : "false",
+                report.domainPricing?.resaleSignal ?? "",
+                report.domainPricing?.auctionSignal ?? "",
+                report.domainPricing?.source ?? "",
                 openPorts,
                 report.network.reachabilitySummary,
                 report.network.geolocationSummary,

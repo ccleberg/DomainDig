@@ -71,62 +71,11 @@ struct ContentView: View {
                                     .padding(.top, appDensity.metrics.cardSpacing)
                             }
                         }
-                        DomainSectionView(
-                            isCollapsed: sectionCollapsedBinding(.domain),
-                            rows: viewModel.domainRows,
-                            suggestions: viewModel.suggestionRows,
-                            showSuggestions: viewModel.availabilityResult?.status == .registered || viewModel.suggestionsLoading,
-                            availabilityLoading: viewModel.availabilityLoading,
-                            suggestionsLoading: viewModel.suggestionsLoading,
-                            provenance: viewModel.currentSnapshot.provenanceBySection[.availability],
-                            confidence: viewModel.currentSnapshot.availabilityConfidence,
-                            snapshotNote: viewModel.currentSnapshot.note,
-                            trackedDomain: viewModel.currentTrackedDomain,
-                            workflows: viewModel.currentDomainWorkflows,
-                            trackingLimitMessage: viewModel.trackingLimitMessage,
-                            onTrack: {
-                                _ = viewModel.trackCurrentDomain()
-                            },
-                            onTogglePinned: {
-                                guard let trackedDomain = viewModel.currentTrackedDomain else { return }
-                                viewModel.togglePinned(for: trackedDomain)
-                            },
-                            onEditNote: {
-                                guard let trackedDomain = viewModel.currentTrackedDomain else { return }
-                                trackingNoteDraft = trackedDomain.note ?? ""
-                                editingTrackedDomain = trackedDomain
-                            },
-                            onAddToWorkflow: {
-                                showingCurrentDomainWorkflowSheet = true
-                            },
-                            onOpenWorkflow: { workflow in
-                                navigationPath.append(WorkflowNavigationTarget(workflowID: workflow.id))
-                            },
-                            onRunWorkflow: { workflow in
-                                viewModel.rerunCurrentDomain(in: workflow)
-                            }
-                        )
+                        domainOverviewSection
                             .padding(.top, appDensity.metrics.sectionSpacing)
-                        OwnershipSectionView(
-                            isCollapsed: sectionCollapsedBinding(.ownership),
-                            rows: viewModel.ownershipRows,
-                            loading: viewModel.ownershipLoading,
-                            error: viewModel.ownershipError,
-                            provenance: viewModel.currentSnapshot.provenanceBySection[.ownership],
-                            confidence: viewModel.currentSnapshot.ownershipConfidence,
-                            showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .ownershipHistory)
-                        )
+                        ownershipSection
                         .padding(.top, appDensity.metrics.sectionSpacing)
-                        SubdomainsSectionView(
-                            isCollapsed: sectionCollapsedBinding(.subdomains),
-                            rows: viewModel.subdomainRows,
-                            groups: viewModel.currentSubdomainGroups,
-                            loading: viewModel.subdomainsLoading,
-                            error: viewModel.subdomainsError,
-                            provenance: viewModel.currentSnapshot.provenanceBySection[.subdomains],
-                            confidence: viewModel.currentSnapshot.subdomainConfidence,
-                            showsExtendedPlaceholder: !DataAccessService.hasAccess(to: .extendedSubdomains)
-                        )
+                        subdomainsSection
                         .padding(.top, appDensity.metrics.sectionSpacing)
                         if !viewModel.currentDiffSections.isEmpty {
                             DomainDiffView(
@@ -137,17 +86,7 @@ struct ContentView: View {
                             )
                             .padding(.top, appDensity.metrics.sectionSpacing)
                         }
-                        DNSSectionView(
-                            isCollapsed: sectionCollapsedBinding(.dns),
-                            dnssecLabel: viewModel.dnssecLabel,
-                            patternSummary: viewModel.currentDNSPatterns,
-                            sections: viewModel.dnsRows,
-                            ptrMessage: viewModel.ptrMessage,
-                            loading: viewModel.dnsLoading || viewModel.ptrLoading,
-                            dnsProvenance: viewModel.currentSnapshot.provenanceBySection[.dns],
-                            ptrProvenance: viewModel.currentSnapshot.provenanceBySection[.ptr],
-                            sectionError: viewModel.dnsError
-                        )
+                        dnsSection
                         .padding(.top, appDensity.metrics.sectionSpacing)
                         WebSectionView(
                             isCollapsed: sectionCollapsedBinding(.web),
@@ -239,6 +178,9 @@ struct ContentView: View {
         }
         .onAppear {
             domainFieldFocused = true
+        }
+        .task {
+            await viewModel.refreshUsageCredits()
         }
         .onChange(of: viewModel.searchedDomain) { _, _ in
             collapsedSections = defaultCollapsedSections
@@ -370,6 +312,117 @@ struct ContentView: View {
             }
         }
         .padding(.vertical, appDensity.metrics.sectionSpacing)
+    }
+
+    private var domainOverviewSection: some View {
+        let trackedDomain = viewModel.currentTrackedDomain
+        let workflows = viewModel.currentDomainWorkflows
+
+        return DomainSectionView(
+            isCollapsed: sectionCollapsedBinding(.domain),
+            rows: viewModel.domainRows,
+            suggestions: viewModel.suggestionRows,
+            showSuggestions: viewModel.availabilityResult?.status == .registered || viewModel.suggestionsLoading,
+            availabilityLoading: viewModel.availabilityLoading,
+            suggestionsLoading: viewModel.suggestionsLoading,
+            provenance: viewModel.currentSnapshot.provenanceBySection[.availability],
+            confidence: viewModel.currentSnapshot.availabilityConfidence,
+            snapshotNote: viewModel.currentSnapshot.note,
+            trackedDomain: trackedDomain,
+            workflows: workflows,
+            trackingLimitMessage: viewModel.trackingLimitMessage,
+            pricingLoading: viewModel.domainPricingLoading,
+            pricingError: viewModel.domainPricingError,
+            showsPricingPlaceholder: !DataAccessService.hasAccess(to: .domainPricing),
+            onTrack: {
+                _ = viewModel.trackCurrentDomain()
+            },
+            onTogglePinned: {
+                guard let trackedDomain else { return }
+                viewModel.togglePinned(for: trackedDomain)
+            },
+            onEditNote: {
+                guard let trackedDomain else { return }
+                trackingNoteDraft = trackedDomain.note ?? ""
+                editingTrackedDomain = trackedDomain
+            },
+            onAddToWorkflow: {
+                showingCurrentDomainWorkflowSheet = true
+            },
+            onOpenWorkflow: { workflow in
+                navigationPath.append(WorkflowNavigationTarget(workflowID: workflow.id))
+            },
+            onRunWorkflow: { workflow in
+                viewModel.rerunCurrentDomain(in: workflow)
+            }
+        )
+    }
+
+    private var ownershipSection: some View {
+        OwnershipSectionView(
+            isCollapsed: sectionCollapsedBinding(.ownership),
+            rows: viewModel.ownershipRows,
+            loading: viewModel.ownershipLoading,
+            error: viewModel.ownershipError,
+            provenance: viewModel.currentSnapshot.provenanceBySection[.ownership],
+            confidence: viewModel.currentSnapshot.ownershipConfidence,
+            showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .ownershipHistory),
+            history: viewModel.ownershipHistory,
+            historyLoading: viewModel.ownershipHistoryLoading,
+            historyError: viewModel.ownershipHistoryError,
+            historyCreditStatus: viewModel.ownershipHistoryCreditStatus,
+            onLoadHistory: {
+                Task {
+                    await viewModel.loadOwnershipHistory()
+                }
+            }
+        )
+    }
+
+    private var subdomainsSection: some View {
+        SubdomainsSectionView(
+            isCollapsed: sectionCollapsedBinding(.subdomains),
+            rows: viewModel.subdomainRows,
+            groups: viewModel.currentSubdomainGroups,
+            loading: viewModel.subdomainsLoading,
+            error: viewModel.subdomainsError,
+            provenance: viewModel.currentSnapshot.provenanceBySection[.subdomains],
+            confidence: viewModel.currentSnapshot.subdomainConfidence,
+            showsExtendedPlaceholder: !DataAccessService.hasAccess(to: .extendedSubdomains),
+            extendedCount: viewModel.extendedSubdomains.count,
+            extendedLoading: viewModel.extendedSubdomainsLoading,
+            extendedError: viewModel.extendedSubdomainsError,
+            extendedCreditStatus: viewModel.extendedSubdomainsCreditStatus,
+            onLoadExtended: {
+                Task {
+                    await viewModel.loadExtendedSubdomains()
+                }
+            }
+        )
+    }
+
+    private var dnsSection: some View {
+        DNSSectionView(
+            isCollapsed: sectionCollapsedBinding(.dns),
+            dnssecLabel: viewModel.dnssecLabel,
+            patternSummary: viewModel.currentDNSPatterns,
+            sections: viewModel.dnsRows,
+            ptrMessage: viewModel.ptrMessage,
+            loading: viewModel.dnsLoading || viewModel.ptrLoading,
+            dnsProvenance: viewModel.currentSnapshot.provenanceBySection[.dns],
+            ptrProvenance: viewModel.currentSnapshot.provenanceBySection[.ptr],
+            sectionError: viewModel.dnsError,
+            history: viewModel.dnsHistory,
+            historyLoading: viewModel.dnsHistoryLoading,
+            historyError: viewModel.dnsHistoryError,
+            showsHistoryPlaceholder: !DataAccessService.hasAccess(to: .dnsHistory),
+            historyCreditStatus: viewModel.dnsHistoryCreditStatus,
+            onLoadHistory: {
+                Task {
+                    await viewModel.loadDNSHistory()
+                }
+            }
+        )
     }
 
     private var actionButtons: some View {
@@ -1192,6 +1245,9 @@ struct DomainSectionView: View {
     let trackedDomain: TrackedDomain?
     let workflows: [DomainWorkflow]
     let trackingLimitMessage: String?
+    let pricingLoading: Bool
+    let pricingError: String?
+    let showsPricingPlaceholder: Bool
     let onTrack: () -> Void
     let onTogglePinned: () -> Void
     let onEditNote: (() -> Void)?
@@ -1313,12 +1369,24 @@ struct DomainSectionView: View {
                         }
                     }
                 }
+                if pricingLoading {
+                    ProgressView("Loading external pricing…")
+                        .appLoadingStyle()
+                        .padding(.top, 4)
+                } else if let pricingError {
+                    MessageRowView(text: pricingError, isError: false)
+                        .padding(.top, 4)
+                } else if showsPricingPlaceholder {
+                    MessageRowView(text: "Pricing signals available in Data+", isError: false)
+                        .padding(.top, 4)
+                }
             }
         }
     }
 }
 
 struct OwnershipSectionView: View {
+    @Environment(\.appDensity) private var appDensity
     @Binding var isCollapsed: Bool
     let rows: [InfoRowViewData]
     let loading: Bool
@@ -1326,6 +1394,39 @@ struct OwnershipSectionView: View {
     let provenance: SectionProvenance?
     let confidence: ConfidenceLevel?
     let showsHistoryPlaceholder: Bool
+    let history: [DomainOwnershipHistoryEvent]
+    let historyLoading: Bool
+    let historyError: String?
+    let historyCreditStatus: UsageCreditStatus?
+    let onLoadHistory: (() -> Void)?
+
+    init(
+        isCollapsed: Binding<Bool>,
+        rows: [InfoRowViewData],
+        loading: Bool,
+        error: String?,
+        provenance: SectionProvenance?,
+        confidence: ConfidenceLevel?,
+        showsHistoryPlaceholder: Bool,
+        history: [DomainOwnershipHistoryEvent] = [],
+        historyLoading: Bool = false,
+        historyError: String? = nil,
+        historyCreditStatus: UsageCreditStatus? = nil,
+        onLoadHistory: (() -> Void)? = nil
+    ) {
+        _isCollapsed = isCollapsed
+        self.rows = rows
+        self.loading = loading
+        self.error = error
+        self.provenance = provenance
+        self.confidence = confidence
+        self.showsHistoryPlaceholder = showsHistoryPlaceholder
+        self.history = history
+        self.historyLoading = historyLoading
+        self.historyError = historyError
+        self.historyCreditStatus = historyCreditStatus
+        self.onLoadHistory = onLoadHistory
+    }
 
     var body: some View {
         CollapsibleSectionView(title: "Ownership", isCollapsed: $isCollapsed) {
@@ -1342,9 +1443,41 @@ struct OwnershipSectionView: View {
                         MessageRowView(text: error, isError: error != "Unavailable")
                             .padding(.top, 4)
                     }
-                    if showsHistoryPlaceholder {
-                        MessageRowView(text: "Ownership history (coming soon)", isError: false)
-                            .padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("History")
+                                .font(appDensity.font(.caption))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if let historyCreditStatus, let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
+                                Button("Load (\(historyCreditStatus.remaining) left)") {
+                                    onLoadHistory()
+                                }
+                                .buttonStyle(.bordered)
+                                .font(appDensity.font(.caption2))
+                            }
+                        }
+                        if historyLoading {
+                            ProgressView("Loading history…")
+                                .appLoadingStyle()
+                        } else if !history.isEmpty {
+                            ForEach(history) { event in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(event.date.formatted(date: .abbreviated, time: .omitted))
+                                        .font(appDensity.font(.caption2))
+                                        .foregroundStyle(.secondary)
+                                    Text(event.summary)
+                                        .font(appDensity.font(.caption))
+                                    Text(event.source)
+                                        .font(appDensity.font(.caption2))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else if let historyError {
+                            MessageRowView(text: historyError, isError: false)
+                        } else if showsHistoryPlaceholder {
+                            MessageRowView(text: "Ownership history available in Data+", isError: false)
+                        }
                     }
                 }
             }
@@ -1362,6 +1495,41 @@ struct SubdomainsSectionView: View {
     let provenance: SectionProvenance?
     let confidence: ConfidenceLevel?
     let showsExtendedPlaceholder: Bool
+    let extendedCount: Int
+    let extendedLoading: Bool
+    let extendedError: String?
+    let extendedCreditStatus: UsageCreditStatus?
+    let onLoadExtended: (() -> Void)?
+
+    init(
+        isCollapsed: Binding<Bool>,
+        rows: [SubdomainRowViewData],
+        groups: [SubdomainGroup],
+        loading: Bool,
+        error: String?,
+        provenance: SectionProvenance?,
+        confidence: ConfidenceLevel?,
+        showsExtendedPlaceholder: Bool,
+        extendedCount: Int = 0,
+        extendedLoading: Bool = false,
+        extendedError: String? = nil,
+        extendedCreditStatus: UsageCreditStatus? = nil,
+        onLoadExtended: (() -> Void)? = nil
+    ) {
+        _isCollapsed = isCollapsed
+        self.rows = rows
+        self.groups = groups
+        self.loading = loading
+        self.error = error
+        self.provenance = provenance
+        self.confidence = confidence
+        self.showsExtendedPlaceholder = showsExtendedPlaceholder
+        self.extendedCount = extendedCount
+        self.extendedLoading = extendedLoading
+        self.extendedError = extendedError
+        self.extendedCreditStatus = extendedCreditStatus
+        self.onLoadExtended = onLoadExtended
+    }
 
     var body: some View {
         CollapsibleSectionView(title: "Subdomains", isCollapsed: $isCollapsed, subtitle: "\(rows.count) found") {
@@ -1373,10 +1541,17 @@ struct SubdomainsSectionView: View {
                 } else if rows.isEmpty {
                     MessageRowView(text: error ?? "No passive subdomains found", isError: false)
                     if showsExtendedPlaceholder {
-                        MessageRowView(text: "Extended subdomain discovery (Data+)", isError: false)
+                        MessageRowView(text: "Extended subdomain discovery available in Data+", isError: false)
                             .padding(.top, 4)
                     }
                 } else {
+                    if let extendedCreditStatus, let onLoadExtended, extendedCount == 0, !extendedLoading, !showsExtendedPlaceholder {
+                        Button("Load extended results (\(extendedCreditStatus.remaining) left)") {
+                            onLoadExtended()
+                        }
+                        .buttonStyle(.bordered)
+                        .font(appDensity.font(.caption2))
+                    }
                     if !groups.isEmpty {
                         Text("Groups")
                             .font(appDensity.font(.caption2))
@@ -1411,8 +1586,18 @@ struct SubdomainsSectionView: View {
                             }
                         }
                     }
-                    if showsExtendedPlaceholder {
-                        MessageRowView(text: "Extended subdomain discovery (Data+)", isError: false)
+                    if extendedLoading {
+                        ProgressView("Loading extended subdomains…")
+                            .appLoadingStyle()
+                            .padding(.top, 4)
+                    } else if extendedCount > 0 {
+                        MessageRowView(text: "\(extendedCount) extended results included", isError: false)
+                            .padding(.top, 4)
+                    } else if let extendedError {
+                        MessageRowView(text: extendedError, isError: false)
+                            .padding(.top, 4)
+                    } else if showsExtendedPlaceholder {
+                        MessageRowView(text: "Extended subdomain discovery available in Data+", isError: false)
                             .padding(.top, 4)
                     }
                 }
@@ -1422,6 +1607,7 @@ struct SubdomainsSectionView: View {
 }
 
 struct DNSSectionView: View {
+    @Environment(\.appDensity) private var appDensity
     @Binding var isCollapsed: Bool
     let dnssecLabel: String?
     let patternSummary: DNSPatternSummary?
@@ -1431,6 +1617,46 @@ struct DNSSectionView: View {
     let dnsProvenance: SectionProvenance?
     let ptrProvenance: SectionProvenance?
     let sectionError: String?
+    let history: [DNSHistoryEvent]
+    let historyLoading: Bool
+    let historyError: String?
+    let showsHistoryPlaceholder: Bool
+    let historyCreditStatus: UsageCreditStatus?
+    let onLoadHistory: (() -> Void)?
+
+    init(
+        isCollapsed: Binding<Bool>,
+        dnssecLabel: String?,
+        patternSummary: DNSPatternSummary?,
+        sections: [DNSRecordSectionViewData],
+        ptrMessage: SectionMessageViewData?,
+        loading: Bool,
+        dnsProvenance: SectionProvenance?,
+        ptrProvenance: SectionProvenance?,
+        sectionError: String?,
+        history: [DNSHistoryEvent] = [],
+        historyLoading: Bool = false,
+        historyError: String? = nil,
+        showsHistoryPlaceholder: Bool = false,
+        historyCreditStatus: UsageCreditStatus? = nil,
+        onLoadHistory: (() -> Void)? = nil
+    ) {
+        _isCollapsed = isCollapsed
+        self.dnssecLabel = dnssecLabel
+        self.patternSummary = patternSummary
+        self.sections = sections
+        self.ptrMessage = ptrMessage
+        self.loading = loading
+        self.dnsProvenance = dnsProvenance
+        self.ptrProvenance = ptrProvenance
+        self.sectionError = sectionError
+        self.history = history
+        self.historyLoading = historyLoading
+        self.historyError = historyError
+        self.showsHistoryPlaceholder = showsHistoryPlaceholder
+        self.historyCreditStatus = historyCreditStatus
+        self.onLoadHistory = onLoadHistory
+    }
 
     var body: some View {
         CollapsibleSectionView(title: "DNS", isCollapsed: $isCollapsed, subtitle: dnssecLabel) {
@@ -1489,6 +1715,50 @@ struct DNSSectionView: View {
                             .foregroundStyle(.cyan)
                         SectionTrustMetadataView(provenance: ptrProvenance, confidence: nil)
                         MessageRowView(text: ptrMessage.text, isError: ptrMessage.isError)
+                    }
+                }
+
+                CardView(allowsHorizontalScroll: false) {
+                    HStack {
+                        Text("History")
+                            .font(appDensity.font(.subheadline, weight: .semibold))
+                            .foregroundStyle(.cyan)
+                        Spacer()
+                        if let historyCreditStatus, let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
+                            Button("Load (\(historyCreditStatus.remaining) left)") {
+                                onLoadHistory()
+                            }
+                            .buttonStyle(.bordered)
+                            .font(appDensity.font(.caption2))
+                        }
+                    }
+                    if historyLoading {
+                        ProgressView("Loading DNS history…")
+                            .appLoadingStyle()
+                    } else if !history.isEmpty {
+                        ForEach(history) { event in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(event.date.formatted(date: .abbreviated, time: .omitted))
+                                    .font(appDensity.font(.caption2))
+                                    .foregroundStyle(.secondary)
+                                Text(event.summary)
+                                    .font(appDensity.font(.caption))
+                                if !event.aRecords.isEmpty {
+                                    Text("A: \(event.aRecords.joined(separator: ", "))")
+                                        .font(appDensity.font(.caption2))
+                                        .foregroundStyle(.secondary)
+                                }
+                                if !event.nameservers.isEmpty {
+                                    Text("NS: \(event.nameservers.joined(separator: ", "))")
+                                        .font(appDensity.font(.caption2))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } else if let historyError {
+                        MessageRowView(text: historyError, isError: false)
+                    } else if showsHistoryPlaceholder {
+                        MessageRowView(text: "DNS history available in Data+", isError: false)
                     }
                 }
             }
@@ -2220,11 +2490,11 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Pro") {
+            Section("Tier") {
                 LabeledContent("Status", value: purchaseService.currentTier.title)
 
                 if purchaseService.currentTier == .free {
-                    Button("Upgrade to Pro") {
+                    Button("Upgrade") {
                         viewModel.isPaywallPresented = true
                     }
                 } else {
@@ -2255,6 +2525,23 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Data+ Usage") {
+                ForEach(UsageCreditFeature.allCases) { feature in
+                    let status = viewModel.usageCredits[feature] ?? UsageCreditStatus(
+                        feature: feature,
+                        remaining: feature.defaultAllowance,
+                        total: feature.defaultAllowance,
+                        resetContext: "Resets with app version \(AppVersion.current)"
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent(feature.title, value: status.summary)
+                        Text(status.resetContext)
+                            .font(appDensity.font(.caption, design: .default))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Features") {
                 ForEach(FeatureAccessService.enabledFeatureLabels(), id: \.self) { label in
                     Text(label)
@@ -2264,7 +2551,7 @@ struct SettingsView: View {
             Section("About") {
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Storage", value: "Local-only")
-                LabeledContent("Report Schema", value: "3.1.0")
+                LabeledContent("Report Schema", value: "3.2.0")
             }
         }
         .navigationTitle("Settings")
@@ -2304,6 +2591,9 @@ struct SettingsView: View {
             let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
             resolverOption = DNSResolverOption.option(for: currentResolverURL)
             customResolverURL = resolverOption == .custom ? currentResolverURL : DNSResolverOption.defaultURLString
+            Task {
+                await viewModel.refreshUsageCredits()
+            }
         }
         .onChange(of: resolverOption) { _, newValue in
             guard let presetURL = newValue.urlString else {

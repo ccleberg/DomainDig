@@ -59,7 +59,7 @@ enum SubdomainDiscoveryService {
                 guard seen.insert(sanitized).inserted else {
                     continue
                 }
-                results.append(DiscoveredSubdomain(hostname: sanitized))
+                results.append(DiscoveredSubdomain(hostname: sanitized, source: "crt.sh"))
                 if results.count == limit {
                     return results
                 }

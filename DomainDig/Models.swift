@@ -370,6 +370,117 @@ enum DataCapability: String, Codable {
     case domainPricing
 }
 
+enum UsageCreditFeature: String, Codable, CaseIterable, Identifiable, Sendable {
+    case ownershipHistory
+    case dnsHistory
+    case extendedSubdomains
+
+    nonisolated var id: String { rawValue }
+
+    nonisolated var title: String {
+        switch self {
+        case .ownershipHistory:
+            return "Ownership history"
+        case .dnsHistory:
+            return "DNS history"
+        case .extendedSubdomains:
+            return "Extended subdomains"
+        }
+    }
+
+    nonisolated var defaultAllowance: Int {
+        switch self {
+        case .ownershipHistory, .dnsHistory:
+            return 8
+        case .extendedSubdomains:
+            return 12
+        }
+    }
+}
+
+struct UsageCreditStatus: Codable, Equatable, Sendable {
+    let feature: UsageCreditFeature
+    let remaining: Int
+    let total: Int
+    let resetContext: String
+
+    nonisolated var summary: String {
+        "\(remaining) uses remaining"
+    }
+
+    nonisolated var isExhausted: Bool {
+        remaining <= 0
+    }
+}
+
+struct DomainOwnershipHistoryEvent: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let date: Date
+    let summary: String
+    let registrar: String?
+    let registrant: String?
+    let nameservers: [String]
+    let source: String
+    let isExternal: Bool
+
+    nonisolated init(
+        id: UUID = UUID(),
+        date: Date,
+        summary: String,
+        registrar: String? = nil,
+        registrant: String? = nil,
+        nameservers: [String] = [],
+        source: String,
+        isExternal: Bool
+    ) {
+        self.id = id
+        self.date = date
+        self.summary = summary
+        self.registrar = registrar
+        self.registrant = registrant
+        self.nameservers = nameservers
+        self.source = source
+        self.isExternal = isExternal
+    }
+}
+
+struct DNSHistoryEvent: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let date: Date
+    let summary: String
+    let aRecords: [String]
+    let nameservers: [String]
+    let source: String
+    let isExternal: Bool
+
+    nonisolated init(
+        id: UUID = UUID(),
+        date: Date,
+        summary: String,
+        aRecords: [String] = [],
+        nameservers: [String] = [],
+        source: String,
+        isExternal: Bool
+    ) {
+        self.id = id
+        self.date = date
+        self.summary = summary
+        self.aRecords = aRecords
+        self.nameservers = nameservers
+        self.source = source
+        self.isExternal = isExternal
+    }
+}
+
+struct DomainPricingInsight: Codable, Equatable, Sendable {
+    let estimatedPrice: String?
+    let premiumIndicator: Bool?
+    let resaleSignal: String?
+    let auctionSignal: String?
+    let source: String
+    let collectedAt: Date
+}
+
 enum HistoryDateFilter: String, CaseIterable, Identifiable {
     case today
     case last7Days
@@ -691,6 +802,7 @@ struct IPGeolocation: Codable {
 
 struct DomainOwnership: Codable, Equatable {
     let registrar: String?
+    let registrant: String?
     let createdDate: Date?
     let expirationDate: Date?
     let status: [String]
@@ -699,6 +811,7 @@ struct DomainOwnership: Codable, Equatable {
 
     init(
         registrar: String? = nil,
+        registrant: String? = nil,
         createdDate: Date? = nil,
         expirationDate: Date? = nil,
         status: [String] = [],
@@ -706,6 +819,7 @@ struct DomainOwnership: Codable, Equatable {
         abuseEmail: String? = nil
     ) {
         self.registrar = registrar
+        self.registrant = registrant
         self.createdDate = createdDate
         self.expirationDate = expirationDate
         self.status = status
@@ -716,6 +830,7 @@ struct DomainOwnership: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         registrar = try container.decodeIfPresent(String.self, forKey: .registrar)
+        registrant = try container.decodeIfPresent(String.self, forKey: .registrant)
         createdDate = try container.decodeIfPresent(Date.self, forKey: .createdDate)
         expirationDate = try container.decodeIfPresent(Date.self, forKey: .expirationDate)
         status = try container.decodeIfPresent([String].self, forKey: .status) ?? []
@@ -724,9 +839,17 @@ struct DomainOwnership: Codable, Equatable {
     }
 }
 
-struct DiscoveredSubdomain: Codable, Equatable, Hashable, Identifiable {
+struct DiscoveredSubdomain: Codable, Equatable, Hashable, Identifiable, Sendable {
     var id: String { hostname }
     let hostname: String
+    let source: String?
+    let isExtended: Bool
+
+    nonisolated init(hostname: String, source: String? = nil, isExtended: Bool = false) {
+        self.hostname = hostname
+        self.source = source
+        self.isExtended = isExtended
+    }
 }
 
 // MARK: - Email Security Models
@@ -857,9 +980,13 @@ struct HistoryEntry: Identifiable, Codable {
     var emailSecurity: EmailSecurityResult?
     var mtaSts: MTASTSResult?
     var ownership: DomainOwnership?
+    var ownershipHistory: [DomainOwnershipHistoryEvent]
     var ptrRecord: String?
     var redirectChain: [RedirectHop]
     var subdomains: [DiscoveredSubdomain]
+    var extendedSubdomains: [DiscoveredSubdomain]
+    var dnsHistory: [DNSHistoryEvent]
+    var domainPricing: DomainPricingInsight?
     var portScanResults: [PortScanResult]
     var hstsPreloaded: Bool?
     var availabilityResult: DomainAvailabilityResult?
@@ -891,16 +1018,23 @@ struct HistoryEntry: Identifiable, Codable {
     var ipGeolocationError: String?
     var emailSecurityError: String?
     var ownershipError: String?
+    var ownershipHistoryError: String?
     var ptrError: String?
     var redirectChainError: String?
     var subdomainsError: String?
+    var extendedSubdomainsError: String?
+    var dnsHistoryError: String?
+    var domainPricingError: String?
     var portScanError: String?
 
     init(domain: String, timestamp: Date, trackedDomainID: UUID? = nil, note: String? = nil, dnsSections: [DNSSection],
          sslInfo: SSLCertificateInfo?, httpHeaders: [HTTPHeader],
          reachabilityResults: [PortReachability], ipGeolocation: IPGeolocation?,
          emailSecurity: EmailSecurityResult? = nil, mtaSts: MTASTSResult? = nil, ownership: DomainOwnership? = nil,
+         ownershipHistory: [DomainOwnershipHistoryEvent] = [],
          ptrRecord: String? = nil, redirectChain: [RedirectHop] = [], subdomains: [DiscoveredSubdomain] = [],
+         extendedSubdomains: [DiscoveredSubdomain] = [], dnsHistory: [DNSHistoryEvent] = [],
+         domainPricing: DomainPricingInsight? = nil,
          portScanResults: [PortScanResult] = [],
          hstsPreloaded: Bool? = nil, availabilityResult: DomainAvailabilityResult? = nil,
          suggestions: [DomainSuggestionResult] = [], appVersion: String = "2.7.0",
@@ -915,8 +1049,10 @@ struct HistoryEntry: Identifiable, Codable {
          tlsStatusSummary: String? = nil, emailSecuritySummary: String? = nil, httpGradeSummary: String? = nil,
          changeSummary: DomainChangeSummary? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
          reachabilityError: String? = nil, ipGeolocationError: String? = nil,
-         emailSecurityError: String? = nil, ownershipError: String? = nil, ptrError: String? = nil,
-         redirectChainError: String? = nil, subdomainsError: String? = nil, portScanError: String? = nil) {
+         emailSecurityError: String? = nil, ownershipError: String? = nil, ownershipHistoryError: String? = nil,
+         ptrError: String? = nil, redirectChainError: String? = nil, subdomainsError: String? = nil,
+         extendedSubdomainsError: String? = nil, dnsHistoryError: String? = nil,
+         domainPricingError: String? = nil, portScanError: String? = nil) {
         self.domain = domain
         self.timestamp = timestamp
         self.trackedDomainID = trackedDomainID
@@ -929,9 +1065,13 @@ struct HistoryEntry: Identifiable, Codable {
         self.emailSecurity = emailSecurity
         self.mtaSts = mtaSts ?? emailSecurity?.mtaSts
         self.ownership = ownership
+        self.ownershipHistory = ownershipHistory
         self.ptrRecord = ptrRecord
         self.redirectChain = redirectChain
         self.subdomains = subdomains
+        self.extendedSubdomains = extendedSubdomains
+        self.dnsHistory = dnsHistory
+        self.domainPricing = domainPricing
         self.portScanResults = portScanResults
         self.hstsPreloaded = hstsPreloaded
         self.availabilityResult = availabilityResult
@@ -963,9 +1103,13 @@ struct HistoryEntry: Identifiable, Codable {
         self.ipGeolocationError = ipGeolocationError
         self.emailSecurityError = emailSecurityError
         self.ownershipError = ownershipError
+        self.ownershipHistoryError = ownershipHistoryError
         self.ptrError = ptrError
         self.redirectChainError = redirectChainError
         self.subdomainsError = subdomainsError
+        self.extendedSubdomainsError = extendedSubdomainsError
+        self.dnsHistoryError = dnsHistoryError
+        self.domainPricingError = domainPricingError
         self.portScanError = portScanError
     }
 
@@ -984,9 +1128,13 @@ struct HistoryEntry: Identifiable, Codable {
         emailSecurity = try container.decodeIfPresent(EmailSecurityResult.self, forKey: .emailSecurity)
         mtaSts = try container.decodeIfPresent(MTASTSResult.self, forKey: .mtaSts) ?? emailSecurity?.mtaSts
         ownership = try container.decodeIfPresent(DomainOwnership.self, forKey: .ownership)
+        ownershipHistory = try container.decodeIfPresent([DomainOwnershipHistoryEvent].self, forKey: .ownershipHistory) ?? []
         ptrRecord = try container.decodeIfPresent(String.self, forKey: .ptrRecord)
         redirectChain = try container.decodeIfPresent([RedirectHop].self, forKey: .redirectChain) ?? []
         subdomains = try container.decodeIfPresent([DiscoveredSubdomain].self, forKey: .subdomains) ?? []
+        extendedSubdomains = try container.decodeIfPresent([DiscoveredSubdomain].self, forKey: .extendedSubdomains) ?? []
+        dnsHistory = try container.decodeIfPresent([DNSHistoryEvent].self, forKey: .dnsHistory) ?? []
+        domainPricing = try container.decodeIfPresent(DomainPricingInsight.self, forKey: .domainPricing)
         portScanResults = try container.decodeIfPresent([PortScanResult].self, forKey: .portScanResults) ?? []
         hstsPreloaded = try container.decodeIfPresent(Bool.self, forKey: .hstsPreloaded)
         availabilityResult = try container.decodeIfPresent(DomainAvailabilityResult.self, forKey: .availabilityResult)
@@ -1018,9 +1166,13 @@ struct HistoryEntry: Identifiable, Codable {
         ipGeolocationError = try container.decodeIfPresent(String.self, forKey: .ipGeolocationError)
         emailSecurityError = try container.decodeIfPresent(String.self, forKey: .emailSecurityError)
         ownershipError = try container.decodeIfPresent(String.self, forKey: .ownershipError)
+        ownershipHistoryError = try container.decodeIfPresent(String.self, forKey: .ownershipHistoryError)
         ptrError = try container.decodeIfPresent(String.self, forKey: .ptrError)
         redirectChainError = try container.decodeIfPresent(String.self, forKey: .redirectChainError)
         subdomainsError = try container.decodeIfPresent(String.self, forKey: .subdomainsError)
+        extendedSubdomainsError = try container.decodeIfPresent(String.self, forKey: .extendedSubdomainsError)
+        dnsHistoryError = try container.decodeIfPresent(String.self, forKey: .dnsHistoryError)
+        domainPricingError = try container.decodeIfPresent(String.self, forKey: .domainPricingError)
         portScanError = try container.decodeIfPresent(String.self, forKey: .portScanError)
     }
 

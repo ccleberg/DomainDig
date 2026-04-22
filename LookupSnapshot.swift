@@ -42,12 +42,20 @@ struct LookupSnapshot {
     let emailSecurityError: String?
     let ownership: DomainOwnership?
     let ownershipError: String?
+    let ownershipHistory: [DomainOwnershipHistoryEvent]
+    let ownershipHistoryError: String?
     let ptrRecord: String?
     let ptrError: String?
     let redirectChain: [RedirectHop]
     let redirectChainError: String?
     let subdomains: [DiscoveredSubdomain]
     let subdomainsError: String?
+    let extendedSubdomains: [DiscoveredSubdomain]
+    let extendedSubdomainsError: String?
+    let dnsHistory: [DNSHistoryEvent]
+    let dnsHistoryError: String?
+    let domainPricing: DomainPricingInsight?
+    let domainPricingError: String?
     let portScanResults: [PortScanResult]
     let portScanError: String?
     let changeSummary: DomainChangeSummary?
@@ -104,12 +112,20 @@ extension HistoryEntry {
             emailSecurityError: emailSecurityError,
             ownership: ownership,
             ownershipError: ownershipError,
+            ownershipHistory: ownershipHistory,
+            ownershipHistoryError: ownershipHistoryError,
             ptrRecord: ptrRecord,
             ptrError: ptrError,
             redirectChain: redirectChain,
             redirectChainError: redirectChainError,
             subdomains: subdomains,
             subdomainsError: subdomainsError,
+            extendedSubdomains: extendedSubdomains,
+            extendedSubdomainsError: extendedSubdomainsError,
+            dnsHistory: dnsHistory,
+            dnsHistoryError: dnsHistoryError,
+            domainPricing: domainPricing,
+            domainPricingError: domainPricingError,
             portScanResults: portScanResults,
             portScanError: portScanError,
             changeSummary: changeSummary,

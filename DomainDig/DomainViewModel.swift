@@ -147,6 +147,9 @@ final class DomainViewModel {
     var ownershipResult: DomainOwnership?
     var ownershipLoading = false
     var ownershipError: String?
+    var ownershipHistory: [DomainOwnershipHistoryEvent] = []
+    var ownershipHistoryLoading = false
+    var ownershipHistoryError: String?
 
     var ptrRecord: String?
     var ptrLoading = false
@@ -159,6 +162,16 @@ final class DomainViewModel {
     var subdomains: [DiscoveredSubdomain] = []
     var subdomainsLoading = false
     var subdomainsError: String?
+    var extendedSubdomains: [DiscoveredSubdomain] = []
+    var extendedSubdomainsLoading = false
+    var extendedSubdomainsError: String?
+    var dnsHistory: [DNSHistoryEvent] = []
+    var dnsHistoryLoading = false
+    var dnsHistoryError: String?
+    var domainPricing: DomainPricingInsight?
+    var domainPricingLoading = false
+    var domainPricingError: String?
+    var usageCredits: [UsageCreditFeature: UsageCreditStatus] = DomainViewModel.defaultUsageCredits()
 
     var portScanResults: [PortScanResult] = []
     var portScanLoading = false
@@ -263,8 +276,12 @@ final class DomainViewModel {
         if sslLoading || hstsLoading { labels.append("TLS") }
         if httpHeadersLoading { labels.append("HTTP") }
         if ownershipLoading { labels.append("Ownership") }
+        if ownershipHistoryLoading { labels.append("Ownership History") }
         if emailSecurityLoading { labels.append("Email") }
         if subdomainsLoading { labels.append("Subdomains") }
+        if extendedSubdomainsLoading { labels.append("Extended Subdomains") }
+        if dnsHistoryLoading { labels.append("DNS History") }
+        if domainPricingLoading { labels.append("Pricing") }
         if redirectChainLoading { labels.append("Redirects") }
         if reachabilityLoading { labels.append("Reachability") }
         if ipGeolocationLoading { labels.append("Geolocation") }
@@ -438,12 +455,20 @@ final class DomainViewModel {
             emailSecurityError: emailSecurityError,
             ownership: ownershipResult,
             ownershipError: ownershipError,
+            ownershipHistory: ownershipHistory,
+            ownershipHistoryError: ownershipHistoryError,
             ptrRecord: ptrRecord,
             ptrError: ptrError,
             redirectChain: redirectChain,
             redirectChainError: redirectChainError,
             subdomains: subdomains,
             subdomainsError: subdomainsError,
+            extendedSubdomains: extendedSubdomains,
+            extendedSubdomainsError: extendedSubdomainsError,
+            dnsHistory: dnsHistory,
+            dnsHistoryError: dnsHistoryError,
+            domainPricing: domainPricing,
+            domainPricingError: domainPricingError,
             portScanResults: allPortScanResults,
             portScanError: combinedPortScanError,
             changeSummary: currentChangeSummary,
@@ -480,6 +505,23 @@ final class DomainViewModel {
 
     var currentTLSSummary: WebResultSummary? {
         currentReport?.web
+    }
+
+    var ownershipHistoryCreditStatus: UsageCreditStatus {
+        usageCredits[.ownershipHistory] ?? Self.fallbackCreditStatus(for: .ownershipHistory)
+    }
+
+    var dnsHistoryCreditStatus: UsageCreditStatus {
+        usageCredits[.dnsHistory] ?? Self.fallbackCreditStatus(for: .dnsHistory)
+    }
+
+    var extendedSubdomainsCreditStatus: UsageCreditStatus {
+        usageCredits[.extendedSubdomains] ?? Self.fallbackCreditStatus(for: .extendedSubdomains)
+    }
+
+    var combinedSubdomains: [DiscoveredSubdomain] {
+        let existingHosts = Set(subdomains.map { $0.hostname.lowercased() })
+        return subdomains + extendedSubdomains.filter { !existingHosts.contains($0.hostname.lowercased()) }
     }
 
     var summaryFields: [SummaryFieldViewData] {
@@ -527,7 +569,7 @@ final class DomainViewModel {
     }
 
     var subdomainRows: [SubdomainRowViewData] {
-        Self.subdomainRows(from: currentSnapshot)
+        Self.subdomainRows(from: combinedSubdomains)
     }
 
     var reachabilityRows: [ReachabilityRowViewData] {
@@ -934,6 +976,151 @@ final class DomainViewModel {
         return String(data: data, encoding: .utf8)
     }
 
+    func loadOwnershipHistory() async {
+        guard !searchedDomain.isEmpty else { return }
+        guard DataAccessService.hasAccess(to: .ownershipHistory) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .ownershipHistory)
+            return
+        }
+        guard ownershipHistory.isEmpty else { return }
+
+        let creditStatus = await UsageCreditService.shared.status(for: .ownershipHistory)
+        guard !creditStatus.isExhausted else {
+            ownershipHistoryError = "No ownership history credits remaining"
+            await refreshUsageCredits()
+            return
+        }
+
+        ownershipHistoryLoading = true
+        ownershipHistoryError = nil
+
+        let outcome = await ExternalDataService.shared.ownershipHistory(
+            domain: searchedDomain,
+            currentOwnership: ownershipResult,
+            historyEntries: history
+        )
+
+        switch outcome.value {
+        case let .success(events):
+            ownershipHistory = events
+            ownershipHistoryError = nil
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.ownershipHistory)
+            }
+        case let .empty(message):
+            ownershipHistory = []
+            ownershipHistoryError = message
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.ownershipHistory)
+            }
+        case let .error(message):
+            ownershipHistory = []
+            ownershipHistoryError = conciseExternalMessage(message, fallback: "Ownership history unavailable")
+        }
+
+        ownershipHistoryLoading = false
+        _ = saveHistoryEntry(replaceLatest: true)
+        await refreshUsageCredits()
+    }
+
+    func loadDNSHistory() async {
+        guard !searchedDomain.isEmpty else { return }
+        guard DataAccessService.hasAccess(to: .dnsHistory) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .dnsHistory)
+            return
+        }
+        guard dnsHistory.isEmpty else { return }
+
+        let creditStatus = await UsageCreditService.shared.status(for: .dnsHistory)
+        guard !creditStatus.isExhausted else {
+            dnsHistoryError = "No DNS history credits remaining"
+            await refreshUsageCredits()
+            return
+        }
+
+        dnsHistoryLoading = true
+        dnsHistoryError = nil
+
+        let outcome = await ExternalDataService.shared.dnsHistory(
+            domain: searchedDomain,
+            dnsSections: dnsSections,
+            historyEntries: history
+        )
+
+        switch outcome.value {
+        case let .success(events):
+            dnsHistory = events
+            dnsHistoryError = nil
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.dnsHistory)
+            }
+        case let .empty(message):
+            dnsHistory = []
+            dnsHistoryError = message
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.dnsHistory)
+            }
+        case let .error(message):
+            dnsHistory = []
+            dnsHistoryError = conciseExternalMessage(message, fallback: "DNS history unavailable")
+        }
+
+        dnsHistoryLoading = false
+        _ = saveHistoryEntry(replaceLatest: true)
+        await refreshUsageCredits()
+    }
+
+    func loadExtendedSubdomains() async {
+        guard !searchedDomain.isEmpty else { return }
+        guard DataAccessService.hasAccess(to: .extendedSubdomains) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .extendedSubdomains)
+            return
+        }
+        guard extendedSubdomains.isEmpty else { return }
+
+        let creditStatus = await UsageCreditService.shared.status(for: .extendedSubdomains)
+        guard !creditStatus.isExhausted else {
+            extendedSubdomainsError = "No extended subdomain credits remaining"
+            await refreshUsageCredits()
+            return
+        }
+
+        extendedSubdomainsLoading = true
+        extendedSubdomainsError = nil
+
+        let outcome = await ExternalDataService.shared.extendedSubdomains(
+            domain: searchedDomain,
+            existing: subdomains
+        )
+
+        switch outcome.value {
+        case let .success(results):
+            extendedSubdomains = results
+            extendedSubdomainsError = nil
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.extendedSubdomains)
+            }
+        case let .empty(message):
+            extendedSubdomains = []
+            extendedSubdomainsError = message
+            if outcome.source != .cached {
+                _ = await UsageCreditService.shared.consume(.extendedSubdomains)
+            }
+        case let .error(message):
+            extendedSubdomains = []
+            extendedSubdomainsError = conciseExternalMessage(message, fallback: "Extended subdomains unavailable")
+        }
+
+        extendedSubdomainsLoading = false
+        _ = saveHistoryEntry(replaceLatest: true)
+        await refreshUsageCredits()
+    }
+
+    func refreshUsageCredits() async {
+        let statuses = await UsageCreditService.shared.allStatuses()
+        usageCredits = Dictionary(uniqueKeysWithValues: statuses.map { ($0.feature, $0) })
+    }
+
     func exportBatchText() -> String {
         DomainReportExporter.batchText(
             for: currentBatchReports(),
@@ -1019,11 +1206,18 @@ final class DomainViewModel {
         lastLookupDurationMs = snapshot.totalLookupDurationMs
         refreshingTrackedDomainID = nil
 
+        if DataAccessService.hasAccess(to: .domainPricing), domainPricing == nil {
+            await refreshDomainPricing(for: snapshot.domain, persistAfterFetch: false)
+        }
+
         guard snapshot.statusMessage == nil else {
+            await refreshUsageCredits()
             return history.first(where: { $0.id == snapshot.historyEntryID })
         }
 
-        return saveHistoryEntry(replaceLatest: false)
+        let entry = saveHistoryEntry(replaceLatest: false)
+        await refreshUsageCredits()
+        return entry
     }
 
     private func applySnapshot(_ snapshot: LookupSnapshot) {
@@ -1066,12 +1260,20 @@ final class DomainViewModel {
         emailSecurityError = snapshot.emailSecurityError
         ownershipResult = snapshot.ownership
         ownershipError = snapshot.ownershipError
+        ownershipHistory = snapshot.ownershipHistory
+        ownershipHistoryError = snapshot.ownershipHistoryError
         ptrRecord = snapshot.ptrRecord
         ptrError = snapshot.ptrError
         redirectChain = snapshot.redirectChain
         redirectChainError = snapshot.redirectChainError
         subdomains = snapshot.subdomains
         subdomainsError = snapshot.subdomainsError
+        extendedSubdomains = snapshot.extendedSubdomains
+        extendedSubdomainsError = snapshot.extendedSubdomainsError
+        dnsHistory = snapshot.dnsHistory
+        dnsHistoryError = snapshot.dnsHistoryError
+        domainPricing = snapshot.domainPricing
+        domainPricingError = snapshot.domainPricingError
         portScanResults = snapshot.portScanResults.filter { $0.kind == .standard }
         customPortResults = snapshot.portScanResults.filter { $0.kind == .custom }
         portScanError = snapshot.portScanError
@@ -1087,9 +1289,13 @@ final class DomainViewModel {
         ipGeolocationLoading = false
         emailSecurityLoading = false
         ownershipLoading = false
+        ownershipHistoryLoading = false
         ptrLoading = false
         redirectChainLoading = false
         subdomainsLoading = false
+        extendedSubdomainsLoading = false
+        dnsHistoryLoading = false
+        domainPricingLoading = false
         portScanLoading = false
         customPortScanLoading = false
     }
@@ -1144,12 +1350,20 @@ final class DomainViewModel {
             emailSecurityError: previousSnapshot.emailSecurityError,
             ownership: previousSnapshot.ownership,
             ownershipError: previousSnapshot.ownershipError,
+            ownershipHistory: previousSnapshot.ownershipHistory,
+            ownershipHistoryError: previousSnapshot.ownershipHistoryError,
             ptrRecord: previousSnapshot.ptrRecord,
             ptrError: previousSnapshot.ptrError,
             redirectChain: previousSnapshot.redirectChain,
             redirectChainError: previousSnapshot.redirectChainError,
             subdomains: previousSnapshot.subdomains,
             subdomainsError: previousSnapshot.subdomainsError,
+            extendedSubdomains: previousSnapshot.extendedSubdomains,
+            extendedSubdomainsError: previousSnapshot.extendedSubdomainsError,
+            dnsHistory: previousSnapshot.dnsHistory,
+            dnsHistoryError: previousSnapshot.dnsHistoryError,
+            domainPricing: previousSnapshot.domainPricing,
+            domainPricingError: previousSnapshot.domainPricingError,
             portScanResults: previousSnapshot.portScanResults,
             portScanError: previousSnapshot.portScanError,
             changeSummary: previousSnapshot.changeSummary,
@@ -1515,9 +1729,13 @@ final class DomainViewModel {
             emailSecurity: snapshot.emailSecurity,
             mtaSts: snapshot.emailSecurity?.mtaSts,
             ownership: snapshot.ownership,
+            ownershipHistory: snapshot.ownershipHistory,
             ptrRecord: snapshot.ptrRecord,
             redirectChain: snapshot.redirectChain,
             subdomains: snapshot.subdomains,
+            extendedSubdomains: snapshot.extendedSubdomains,
+            dnsHistory: snapshot.dnsHistory,
+            domainPricing: snapshot.domainPricing,
             portScanResults: snapshot.portScanResults,
             hstsPreloaded: snapshot.hstsPreloaded,
             availabilityResult: snapshot.availabilityResult,
@@ -1549,9 +1767,13 @@ final class DomainViewModel {
             ipGeolocationError: snapshot.ipGeolocationError,
             emailSecurityError: snapshot.emailSecurityError,
             ownershipError: snapshot.ownershipError,
+            ownershipHistoryError: snapshot.ownershipHistoryError,
             ptrError: snapshot.ptrError,
             redirectChainError: snapshot.redirectChainError,
             subdomainsError: snapshot.subdomainsError,
+            extendedSubdomainsError: snapshot.extendedSubdomainsError,
+            dnsHistoryError: snapshot.dnsHistoryError,
+            domainPricingError: snapshot.domainPricingError,
             portScanError: snapshot.portScanError
         )
 
@@ -2038,6 +2260,9 @@ final class DomainViewModel {
         ownershipResult = nil
         ownershipError = nil
         ownershipLoading = false
+        ownershipHistory = []
+        ownershipHistoryError = nil
+        ownershipHistoryLoading = false
         ptrRecord = nil
         ptrError = nil
         ptrLoading = false
@@ -2047,6 +2272,15 @@ final class DomainViewModel {
         subdomains = []
         subdomainsError = nil
         subdomainsLoading = false
+        extendedSubdomains = []
+        extendedSubdomainsError = nil
+        extendedSubdomainsLoading = false
+        dnsHistory = []
+        dnsHistoryError = nil
+        dnsHistoryLoading = false
+        domainPricing = nil
+        domainPricingError = nil
+        domainPricingLoading = false
         portScanResults = []
         portScanError = nil
         portScanLoading = false
@@ -2072,9 +2306,13 @@ final class DomainViewModel {
         ipGeolocationLoading = loading
         emailSecurityLoading = loading
         ownershipLoading = loading
+        ownershipHistoryLoading = false
         ptrLoading = loading
         redirectChainLoading = loading
         subdomainsLoading = loading
+        extendedSubdomainsLoading = false
+        dnsHistoryLoading = false
+        domainPricingLoading = false
         portScanLoading = loading
     }
 
@@ -2248,12 +2486,20 @@ final class DomainViewModel {
             emailSecurityError: nil,
             ownership: nil,
             ownershipError: nil,
+            ownershipHistory: [],
+            ownershipHistoryError: nil,
             ptrRecord: nil,
             ptrError: nil,
             redirectChain: [],
             redirectChainError: nil,
             subdomains: [],
             subdomainsError: nil,
+            extendedSubdomains: [],
+            extendedSubdomainsError: nil,
+            dnsHistory: [],
+            dnsHistoryError: nil,
+            domainPricing: nil,
+            domainPricingError: nil,
             portScanResults: [],
             portScanError: nil,
             changeSummary: trackedDomain.lastChangeSummary,
@@ -2435,6 +2681,30 @@ final class DomainViewModel {
                 at: 3
             )
         }
+        if let pricing = snapshot.domainPricing {
+            rows.append(
+                InfoRowViewData(
+                    label: "External Price",
+                    value: pricing.estimatedPrice ?? "Unavailable",
+                    tone: .secondary
+                )
+            )
+            if let premiumIndicator = pricing.premiumIndicator {
+                rows.append(
+                    InfoRowViewData(
+                        label: "Premium",
+                        value: premiumIndicator ? "Yes" : "No",
+                        tone: premiumIndicator ? .warning : .secondary
+                    )
+                )
+            }
+            if let resaleSignal = pricing.resaleSignal {
+                rows.append(InfoRowViewData(label: "Resale", value: resaleSignal, tone: .secondary))
+            }
+            if let auctionSignal = pricing.auctionSignal {
+                rows.append(InfoRowViewData(label: "Auction", value: auctionSignal, tone: .secondary))
+            }
+        }
         if let certificateStatus = certificateBadgeLabel(from: snapshot) {
             rows.insert(
                 InfoRowViewData(
@@ -2456,6 +2726,15 @@ final class DomainViewModel {
                 availabilityStatus: $0.status,
                 status: availabilityLabel($0.status),
                 tone: availabilityTone($0.status)
+            )
+        }
+    }
+
+    static func subdomainRows(from subdomains: [DiscoveredSubdomain]) -> [SubdomainRowViewData] {
+        subdomains.map { subdomain in
+            SubdomainRowViewData(
+                hostname: subdomain.hostname,
+                isInteresting: subdomain.isExtended || isInterestingSubdomain(subdomain.hostname)
             )
         }
     }
@@ -3097,6 +3376,61 @@ final class DomainViewModel {
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
+
+    private func refreshDomainPricing(for domain: String, persistAfterFetch: Bool) async {
+        domainPricingLoading = true
+        let outcome = await ExternalDataService.shared.pricing(domain: domain)
+
+        switch outcome.value {
+        case let .success(pricing):
+            domainPricing = pricing
+            domainPricingError = nil
+        case let .empty(message):
+            domainPricing = nil
+            domainPricingError = conciseExternalMessage(message, fallback: "External pricing unavailable")
+        case let .error(message):
+            domainPricing = nil
+            domainPricingError = conciseExternalMessage(message, fallback: "External pricing unavailable")
+        }
+
+        domainPricingLoading = false
+
+        if persistAfterFetch {
+            _ = saveHistoryEntry(replaceLatest: true)
+        }
+    }
+
+    private func conciseExternalMessage(_ message: String, fallback: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return fallback
+        }
+        if trimmed.localizedCaseInsensitiveContains("rate") {
+            return "Rate limited. Try again later."
+        }
+        if trimmed.localizedCaseInsensitiveContains("invalid") {
+            return "External data was invalid."
+        }
+        if trimmed.localizedCaseInsensitiveContains("network") {
+            return "External data is offline."
+        }
+        return trimmed
+    }
+
+    private static func defaultUsageCredits() -> [UsageCreditFeature: UsageCreditStatus] {
+        Dictionary(uniqueKeysWithValues: UsageCreditFeature.allCases.map { feature in
+            (feature, fallbackCreditStatus(for: feature))
+        })
+    }
+
+    private static func fallbackCreditStatus(for feature: UsageCreditFeature) -> UsageCreditStatus {
+        UsageCreditStatus(
+            feature: feature,
+            remaining: feature.defaultAllowance,
+            total: feature.defaultAllowance,
+            resetContext: "Resets with app version \(AppVersion.current)"
+        )
+    }
 
     private static func csvEscaped(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")

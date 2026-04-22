@@ -21,11 +21,15 @@ struct DomainReport: Codable {
     let emailConfidence: ConfidenceLevel?
     let geolocationConfidence: ConfidenceLevel?
     let ownership: DomainOwnership?
+    let ownershipHistory: [DomainOwnershipHistoryEvent]
     let dns: DNSResultSummary
     let web: WebResultSummary
     let email: EmailSecuritySummary
     let network: NetworkSummary
     let subdomains: [String]
+    let extendedSubdomains: [String]
+    let dnsHistory: [DNSHistoryEvent]
+    let domainPricing: DomainPricingInsight?
     let subdomainGroups: [SubdomainGroup]
     let riskAssessment: DomainRiskAssessment
     let insights: [String]
@@ -164,6 +168,7 @@ struct DomainReportBuilder {
             emailConfidence: snapshot.emailSecurityConfidence,
             geolocationConfidence: snapshot.geolocationConfidence,
             ownership: snapshot.ownership,
+            ownershipHistory: snapshot.ownershipHistory,
             dns: DNSResultSummary(
                 resolverDisplayName: snapshot.resolverDisplayName,
                 resolverURLString: snapshot.resolverURLString,
@@ -216,13 +221,16 @@ struct DomainReportBuilder {
                 portScanError: snapshot.portScanError
             ),
             subdomains: snapshot.subdomains.map(\.hostname),
+            extendedSubdomains: snapshot.extendedSubdomains.map(\.hostname),
+            dnsHistory: snapshot.dnsHistory,
+            domainPricing: snapshot.domainPricing,
             subdomainGroups: analysis.subdomainGroups,
             riskAssessment: analysis.riskAssessment,
             insights: analysis.insights,
             changeSummary: changeSummary,
             workflowContext: workflowContext,
             metadata: DomainReportMetadata(
-                schemaVersion: "3.0.0",
+                schemaVersion: "3.2.0",
                 resolverDisplayName: snapshot.resolverDisplayName,
                 resolverURLString: snapshot.resolverURLString,
                 appVersion: snapshot.appVersion,

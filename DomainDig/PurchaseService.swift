@@ -17,7 +17,14 @@ final class PurchaseService {
     static let shared = PurchaseService()
     static let monthlyProductID = "domaindig.pro.monthly"
     static let yearlyProductID = "domaindig.pro.yearly"
-    static let productIDs = [monthlyProductID, yearlyProductID]
+    static let dataPlusMonthlyProductID = "domaindig.dataplus.monthly"
+    static let dataPlusYearlyProductID = "domaindig.dataplus.yearly"
+    static let productIDs = [
+        monthlyProductID,
+        yearlyProductID,
+        dataPlusMonthlyProductID,
+        dataPlusYearlyProductID
+    ]
 
     private static let entitlementCacheKey = "purchase.cachedEntitlement"
 
@@ -52,7 +59,11 @@ final class PurchaseService {
     }
 
     var hasProAccess: Bool {
-        currentTier == .pro
+        currentTier != .free
+    }
+
+    var hasDataPlusAccess: Bool {
+        currentTier == .dataPlus
     }
 
     func refreshProducts() async {
@@ -91,7 +102,7 @@ final class PurchaseService {
             .productID
 
         self.activeProductID = activeProductID
-        currentTier = activeProductID == nil ? .free : .pro
+        currentTier = tier(for: activeProductID)
         persistCurrentEntitlement()
     }
 
@@ -109,7 +120,7 @@ final class PurchaseService {
                 apply(transaction: transaction)
                 await transaction.finish()
                 await refreshEntitlements()
-                statusMessage = "Pro is active."
+                statusMessage = currentTier == .dataPlus ? "Data+ is active." : "Pro is active."
             case .userCancelled:
                 break
             case .pending:
@@ -177,7 +188,7 @@ final class PurchaseService {
         }
 
         activeProductID = transaction.productID
-        currentTier = .pro
+        currentTier = tier(for: transaction.productID)
         persistCurrentEntitlement()
     }
 
@@ -224,8 +235,23 @@ final class PurchaseService {
             return 0
         case Self.yearlyProductID:
             return 1
+        case Self.dataPlusMonthlyProductID:
+            return 2
+        case Self.dataPlusYearlyProductID:
+            return 3
         default:
             return Int.max
+        }
+    }
+
+    private func tier(for productID: String?) -> FeatureTier {
+        switch productID {
+        case Self.monthlyProductID, Self.yearlyProductID:
+            return .pro
+        case Self.dataPlusMonthlyProductID, Self.dataPlusYearlyProductID:
+            return .dataPlus
+        default:
+            return .free
         }
     }
 

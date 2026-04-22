@@ -25,6 +25,7 @@ enum RDAPService {
         case let .success(response):
             let ownership = DomainOwnership(
                 registrar: response.registrarName,
+                registrant: response.registrantName,
                 createdDate: response.createdDate,
                 expirationDate: response.expirationDate,
                 status: response.status,
@@ -111,6 +112,10 @@ private struct RDAPDomainResponse: Decodable, Sendable {
 
     var registrarName: String? {
         entities?.first(where: { $0.roles.contains("registrar") })?.bestDisplayName
+    }
+
+    var registrantName: String? {
+        entities?.first(where: { $0.roles.contains("registrant") })?.bestDisplayName
     }
 
     var createdDate: Date? {

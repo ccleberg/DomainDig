@@ -10,7 +10,7 @@ struct PaywallView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Pro unlocks automation, larger runs, and export convenience while keeping the core lookup experience free.")
+                    Text("Pro unlocks workflows, scale, and exports. Data+ adds deeper external intelligence with local-first usage credits and no account requirement.")
                         .font(appDensity.font(.body, design: .default))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -21,6 +21,13 @@ struct PaywallView: View {
                     featureRow("Workflows")
                     featureRow("Larger batch sizes")
                     featureRow("Advanced exports")
+                }
+
+                Section("What Data+ Unlocks") {
+                    featureRow("Ownership history")
+                    featureRow("DNS history")
+                    featureRow("Extended subdomains")
+                    featureRow("External pricing signals")
                 }
 
                 Section("Subscription") {
@@ -116,6 +123,10 @@ struct PaywallView: View {
             return "Pro Monthly"
         case PurchaseService.yearlyProductID:
             return "Pro Yearly"
+        case PurchaseService.dataPlusMonthlyProductID:
+            return "Data+ Monthly"
+        case PurchaseService.dataPlusYearlyProductID:
+            return "Data+ Yearly"
         default:
             return product.displayName
         }

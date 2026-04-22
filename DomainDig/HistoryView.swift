@@ -198,6 +198,9 @@ struct HistoryDetailView: View {
                     trackedDomain: trackedDomain,
                     workflows: viewModel.workflowsContaining(domain: entry.domain),
                     trackingLimitMessage: nil,
+                    pricingLoading: false,
+                    pricingError: snapshot.domainPricingError,
+                    showsPricingPlaceholder: !DataAccessService.hasAccess(to: .domainPricing),
                     onTrack: {
                         _ = viewModel.trackDomain(domain: entry.domain, availabilityStatus: entry.availabilityResult?.status)
                     },
