@@ -22,7 +22,8 @@ struct HistoryView: View {
                     title: "No History Yet",
                     message: "History stores local snapshots of previous inspections so you can revisit and compare them later.",
                     suggestion: "Run a lookup to create your first saved snapshot.",
-                    systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90"
+                    systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90",
+                    showsCardBackground: false
                 )
                     .listRowBackground(Color(.systemGray6).opacity(0.5))
             } else {

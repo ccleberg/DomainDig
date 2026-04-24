@@ -17,18 +17,30 @@ final class PurchaseService {
     static let shared = PurchaseService()
     static let monthlyProductID = "domaindig.pro.monthly"
     static let yearlyProductID = "domaindig.pro.yearly"
-    static let dataPlusMonthlyProductID = "domaindig.dataplus.monthly"
-    static let dataPlusYearlyProductID = "domaindig.dataplus.yearly"
+    static let proPlusMonthlyProductID = "domaindig.dataplus.monthly"
+    static let proPlusYearlyProductID = "domaindig.dataplus.yearly"
     static let productIDs = [
         monthlyProductID,
         yearlyProductID,
-        dataPlusMonthlyProductID,
-        dataPlusYearlyProductID
+        proPlusMonthlyProductID,
+        proPlusYearlyProductID
     ]
 
     private static let entitlementCacheKey = "purchase.cachedEntitlement"
+    #if DEBUG
+    // Local-only screenshot/testing override. Release builds always use StoreKit entitlements.
+    private static let debugForceFreeArgument = "DOMAIN_DIG_FORCE_FREE"
+    private static let debugForceProArgument = "DOMAIN_DIG_FORCE_PRO"
+    private static let debugForceProPlusArgument = "DOMAIN_DIG_FORCE_PRO_PLUS"
+    #endif
 
     static var cachedEntitlement: CachedEntitlement? {
+        #if DEBUG
+        if let forcedEntitlement = debugForcedEntitlement {
+            return forcedEntitlement
+        }
+        #endif
+
         guard let data = UserDefaults.standard.data(forKey: entitlementCacheKey) else { return nil }
         return try? JSONDecoder().decode(CachedEntitlement.self, from: data)
     }
@@ -51,6 +63,7 @@ final class PurchaseService {
     private init() {
         currentTier = Self.cachedTier
         activeProductID = Self.cachedEntitlement?.activeProductID
+        applyDebugOverrideIfNeeded()
         updatesTask = observeTransactionUpdates()
         Task {
             await refreshProducts()
@@ -62,8 +75,8 @@ final class PurchaseService {
         currentTier != .free
     }
 
-    var hasDataPlusAccess: Bool {
-        currentTier == .dataPlus
+    var hasProPlusAccess: Bool {
+        currentTier == .proPlus
     }
 
     func refreshProducts() async {
@@ -104,6 +117,7 @@ final class PurchaseService {
         self.activeProductID = activeProductID
         currentTier = tier(for: activeProductID)
         persistCurrentEntitlement()
+        applyDebugOverrideIfNeeded()
     }
 
     func purchase(_ product: Product) async {
@@ -120,7 +134,7 @@ final class PurchaseService {
                 apply(transaction: transaction)
                 await transaction.finish()
                 await refreshEntitlements()
-                statusMessage = currentTier == .dataPlus ? "Data+ is active." : "Pro is active."
+                statusMessage = currentTier == .proPlus ? "Pro+ is active." : "Pro is active."
             case .userCancelled:
                 break
             case .pending:
@@ -190,6 +204,7 @@ final class PurchaseService {
         activeProductID = transaction.productID
         currentTier = tier(for: transaction.productID)
         persistCurrentEntitlement()
+        applyDebugOverrideIfNeeded()
     }
 
     private func observeTransactionUpdates() -> Task<Void, Never> {
@@ -220,6 +235,14 @@ final class PurchaseService {
         }
     }
 
+    private func applyDebugOverrideIfNeeded() {
+        #if DEBUG
+        guard let forcedEntitlement = Self.debugForcedEntitlement else { return }
+        currentTier = forcedEntitlement.tier
+        activeProductID = forcedEntitlement.activeProductID
+        #endif
+    }
+
     private func verifiedTransaction(from result: VerificationResult<Transaction>) throws -> Transaction {
         switch result {
         case .verified(let transaction):
@@ -235,9 +258,9 @@ final class PurchaseService {
             return 0
         case Self.yearlyProductID:
             return 1
-        case Self.dataPlusMonthlyProductID:
+        case Self.proPlusMonthlyProductID:
             return 2
-        case Self.dataPlusYearlyProductID:
+        case Self.proPlusYearlyProductID:
             return 3
         default:
             return Int.max
@@ -248,8 +271,8 @@ final class PurchaseService {
         switch productID {
         case Self.monthlyProductID, Self.yearlyProductID:
             return .pro
-        case Self.dataPlusMonthlyProductID, Self.dataPlusYearlyProductID:
-            return .dataPlus
+        case Self.proPlusMonthlyProductID, Self.proPlusYearlyProductID:
+            return .proPlus
         default:
             return .free
         }
@@ -268,4 +291,36 @@ final class PurchaseService {
         let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         return message.isEmpty ? fallback : message
     }
+
+    #if DEBUG
+    private static var debugForcedEntitlement: CachedEntitlement? {
+        let arguments = ProcessInfo.processInfo.arguments
+
+        if arguments.contains(debugForceFreeArgument) {
+            return CachedEntitlement(
+                tier: .free,
+                activeProductID: nil,
+                updatedAt: .distantPast
+            )
+        }
+
+        if arguments.contains(debugForceProPlusArgument) {
+            return CachedEntitlement(
+                tier: .proPlus,
+                activeProductID: proPlusMonthlyProductID,
+                updatedAt: .distantPast
+            )
+        }
+
+        if arguments.contains(debugForceProArgument) {
+            return CachedEntitlement(
+                tier: .pro,
+                activeProductID: monthlyProductID,
+                updatedAt: .distantPast
+            )
+        }
+
+        return nil
+    }
+    #endif
 }

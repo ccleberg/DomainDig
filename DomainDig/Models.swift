@@ -728,6 +728,179 @@ struct CollaborationMetadata: Codable, Equatable {
     }
 }
 
+enum MonitoringSensitivity: String, Codable, CaseIterable, Identifiable, Sendable {
+    case low
+    case medium
+    case high
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.capitalized
+    }
+
+    var minimumInterval: TimeInterval {
+        switch self {
+        case .low:
+            return 30 * 60
+        case .medium:
+            return 15 * 60
+        case .high:
+            return 5 * 60
+        }
+    }
+
+    var intervalMultiplier: Double {
+        switch self {
+        case .low:
+            return 1.5
+        case .medium:
+            return 1.25
+        case .high:
+            return 1.1
+        }
+    }
+}
+
+struct QuietHours: Codable, Equatable, Sendable {
+    var startHour: Int
+    var endHour: Int
+
+    init(startHour: Int, endHour: Int) {
+        self.startHour = max(0, min(23, startHour))
+        self.endHour = max(0, min(23, endHour))
+    }
+
+    func contains(_ date: Date, calendar: Calendar = .current) -> Bool {
+        let hour = calendar.component(.hour, from: date)
+        if startHour <= endHour {
+            return hour >= startHour && hour < endHour
+        }
+        return hour >= startHour || hour < endHour
+    }
+}
+
+enum MonitoringBaseInterval: String, Codable, CaseIterable, Identifiable {
+    case thirtyMinutes
+    case hourly
+    case sixHours
+    case twelveHours
+    case daily
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .thirtyMinutes:
+            return "Every 30 Minutes"
+        case .hourly:
+            return "Hourly"
+        case .sixHours:
+            return "Every 6 Hours"
+        case .twelveHours:
+            return "Every 12 Hours"
+        case .daily:
+            return "Daily"
+        }
+    }
+
+    var interval: TimeInterval {
+        switch self {
+        case .thirtyMinutes:
+            return 30 * 60
+        case .hourly:
+            return 60 * 60
+        case .sixHours:
+            return 6 * 60 * 60
+        case .twelveHours:
+            return 12 * 60 * 60
+        case .daily:
+            return 24 * 60 * 60
+        }
+    }
+
+    static func nearest(to interval: TimeInterval) -> MonitoringBaseInterval {
+        allCases.min { abs($0.interval - interval) < abs($1.interval - interval) } ?? .twelveHours
+    }
+}
+
+struct MonitoringConfig: Codable, Equatable, Sendable {
+    var isEnabled: Bool
+    var baseInterval: TimeInterval
+    var adaptiveEnabled: Bool
+    var sensitivity: MonitoringSensitivity
+    var quietHours: QuietHours?
+
+    init(
+        isEnabled: Bool = false,
+        baseInterval: TimeInterval = MonitoringBaseInterval.twelveHours.interval,
+        adaptiveEnabled: Bool = true,
+        sensitivity: MonitoringSensitivity = .medium,
+        quietHours: QuietHours? = nil
+    ) {
+        self.isEnabled = isEnabled
+        self.baseInterval = baseInterval
+        self.adaptiveEnabled = adaptiveEnabled
+        self.sensitivity = sensitivity
+        self.quietHours = quietHours
+    }
+
+    var maxInterval: TimeInterval {
+        24 * 60 * 60
+    }
+
+    var sanitizedBaseInterval: TimeInterval {
+        max(5 * 60, min(baseInterval, maxInterval))
+    }
+}
+
+struct MonitoringState: Codable, Equatable, Sendable {
+    var lastCheck: Date?
+    var lastChangeHash: String?
+    var lastAlertDate: Date?
+    var consecutiveStableChecks: Int
+    var currentInterval: TimeInterval
+    var lastChangeDate: Date?
+
+    init(
+        lastCheck: Date? = nil,
+        lastChangeHash: String? = nil,
+        lastAlertDate: Date? = nil,
+        consecutiveStableChecks: Int = 0,
+        currentInterval: TimeInterval = 0,
+        lastChangeDate: Date? = nil
+    ) {
+        self.lastCheck = lastCheck
+        self.lastChangeHash = lastChangeHash
+        self.lastAlertDate = lastAlertDate
+        self.consecutiveStableChecks = consecutiveStableChecks
+        self.currentInterval = currentInterval
+        self.lastChangeDate = lastChangeDate
+    }
+}
+
+struct MonitoringPendingAlert: Codable, Identifiable, Equatable, Sendable {
+    let id: UUID
+    var detectedAt: Date
+    var message: String
+    var severity: MonitoringAlertSeverity
+    var changeHash: String
+
+    init(
+        id: UUID = UUID(),
+        detectedAt: Date,
+        message: String,
+        severity: MonitoringAlertSeverity,
+        changeHash: String
+    ) {
+        self.id = id
+        self.detectedAt = detectedAt
+        self.message = message
+        self.severity = severity
+        self.changeHash = changeHash
+    }
+}
+
 struct TrackedDomain: Codable, Identifiable, Equatable {
     let id: UUID
     var domain: String
@@ -744,6 +917,8 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
     var certificateDaysRemaining: Int?
     var lastMonitoredAt: Date?
     var lastAlertAt: Date?
+    var monitoringState: MonitoringState
+    var pendingMonitoringAlerts: [MonitoringPendingAlert]
     var collaboration: CollaborationMetadata?
 
     init(
@@ -762,6 +937,8 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
         certificateDaysRemaining: Int? = nil,
         lastMonitoredAt: Date? = nil,
         lastAlertAt: Date? = nil,
+        monitoringState: MonitoringState = MonitoringState(),
+        pendingMonitoringAlerts: [MonitoringPendingAlert] = [],
         collaboration: CollaborationMetadata? = nil
     ) {
         self.id = id
@@ -779,6 +956,8 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
         self.certificateDaysRemaining = certificateDaysRemaining
         self.lastMonitoredAt = lastMonitoredAt
         self.lastAlertAt = lastAlertAt
+        self.monitoringState = monitoringState
+        self.pendingMonitoringAlerts = pendingMonitoringAlerts
         self.collaboration = collaboration
     }
 
@@ -799,32 +978,9 @@ struct TrackedDomain: Codable, Identifiable, Equatable {
         certificateDaysRemaining = try container.decodeIfPresent(Int.self, forKey: .certificateDaysRemaining)
         lastMonitoredAt = try container.decodeIfPresent(Date.self, forKey: .lastMonitoredAt)
         lastAlertAt = try container.decodeIfPresent(Date.self, forKey: .lastAlertAt)
+        monitoringState = try container.decodeIfPresent(MonitoringState.self, forKey: .monitoringState) ?? MonitoringState()
+        pendingMonitoringAlerts = try container.decodeIfPresent([MonitoringPendingAlert].self, forKey: .pendingMonitoringAlerts) ?? []
         collaboration = try container.decodeIfPresent(CollaborationMetadata.self, forKey: .collaboration)
-    }
-}
-
-enum MonitoringFrequency: String, Codable, CaseIterable, Identifiable {
-    case daily
-    case twiceDaily
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .daily:
-            return "Daily"
-        case .twiceDaily:
-            return "Twice Daily"
-        }
-    }
-
-    var schedulingInterval: TimeInterval {
-        switch self {
-        case .daily:
-            return 24 * 60 * 60
-        case .twiceDaily:
-            return 12 * 60 * 60
-        }
     }
 }
 
@@ -913,27 +1069,101 @@ enum MonitoringRunTrigger: String, Codable {
 }
 
 struct MonitoringSettings: Codable, Equatable {
-    var isEnabled: Bool
-    var frequency: MonitoringFrequency
+    private enum CodingKeys: String, CodingKey {
+        case config
+        case isEnabled
+        case frequency
+        case scope
+        case selectedDomainIDs
+        case alertFilter
+        case alertsEnabled
+    }
+
+    var config: MonitoringConfig
     var scope: MonitoringScope
     var selectedDomainIDs: [UUID]
     var alertFilter: MonitoringAlertFilter
     var alertsEnabled: Bool
 
     init(
-        isEnabled: Bool = false,
-        frequency: MonitoringFrequency = .daily,
+        config: MonitoringConfig = MonitoringConfig(),
         scope: MonitoringScope = .allTracked,
         selectedDomainIDs: [UUID] = [],
         alertFilter: MonitoringAlertFilter = .criticalAndWarnings,
         alertsEnabled: Bool = false
     ) {
-        self.isEnabled = isEnabled
-        self.frequency = frequency
+        self.config = config
         self.scope = scope
         self.selectedDomainIDs = selectedDomainIDs
         self.alertFilter = alertFilter
         self.alertsEnabled = alertsEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        let legacyFrequencyRaw = try container.decodeIfPresent(String.self, forKey: .frequency)
+
+        if let decodedConfig = try container.decodeIfPresent(MonitoringConfig.self, forKey: .config) {
+            config = decodedConfig
+        } else {
+            let mappedInterval: TimeInterval
+            switch legacyFrequencyRaw {
+            case "daily":
+                mappedInterval = MonitoringBaseInterval.daily.interval
+            case "twiceDaily":
+                mappedInterval = MonitoringBaseInterval.twelveHours.interval
+            default:
+                mappedInterval = MonitoringBaseInterval.twelveHours.interval
+            }
+
+            config = MonitoringConfig(
+                isEnabled: legacyEnabled,
+                baseInterval: mappedInterval,
+                adaptiveEnabled: true,
+                sensitivity: .medium,
+                quietHours: nil
+            )
+        }
+
+        scope = try container.decodeIfPresent(MonitoringScope.self, forKey: .scope) ?? .allTracked
+        selectedDomainIDs = try container.decodeIfPresent([UUID].self, forKey: .selectedDomainIDs) ?? []
+        alertFilter = try container.decodeIfPresent(MonitoringAlertFilter.self, forKey: .alertFilter) ?? .criticalAndWarnings
+        alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(config, forKey: .config)
+        try container.encode(scope, forKey: .scope)
+        try container.encode(selectedDomainIDs, forKey: .selectedDomainIDs)
+        try container.encode(alertFilter, forKey: .alertFilter)
+        try container.encode(alertsEnabled, forKey: .alertsEnabled)
+    }
+
+    var isEnabled: Bool {
+        get { config.isEnabled }
+        set { config.isEnabled = newValue }
+    }
+
+    var baseInterval: TimeInterval {
+        get { config.baseInterval }
+        set { config.baseInterval = newValue }
+    }
+
+    var adaptiveEnabled: Bool {
+        get { config.adaptiveEnabled }
+        set { config.adaptiveEnabled = newValue }
+    }
+
+    var sensitivity: MonitoringSensitivity {
+        get { config.sensitivity }
+        set { config.sensitivity = newValue }
+    }
+
+    var quietHours: QuietHours? {
+        get { config.quietHours }
+        set { config.quietHours = newValue }
     }
 }
 

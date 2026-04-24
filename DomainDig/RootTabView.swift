@@ -35,17 +35,10 @@ struct RootTabView: View {
             }
 
             NavigationStack {
-                WorkflowsView(viewModel: viewModel)
-            }
-            .tabItem {
-                Label("Workflows", systemImage: "square.stack.3d.down.right")
-            }
-
-            NavigationStack {
                 SettingsView(viewModel: viewModel)
             }
             .tabItem {
-                Label("Settings", systemImage: "gearshape")
+                Label("More", systemImage: "ellipsis.circle")
             }
         }
         .sheet(isPresented: Binding(

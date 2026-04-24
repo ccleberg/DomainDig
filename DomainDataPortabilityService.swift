@@ -231,7 +231,9 @@ enum DataPortabilityCSV {
                 certificateWarningLevel: certificateLevel,
                 certificateDaysRemaining: Int(row["certificateDaysRemaining"] ?? ""),
                 lastMonitoredAt: parseDate(row["lastMonitoredAt"]),
-                lastAlertAt: parseDate(row["lastAlertAt"])
+                lastAlertAt: parseDate(row["lastAlertAt"]),
+                monitoringState: MonitoringState(),
+                pendingMonitoringAlerts: []
             )
         }
     }
@@ -1104,7 +1106,9 @@ enum DomainDataPortabilityService {
             certificateWarningLevel: higherCertificateWarningLevel(existing.certificateWarningLevel, incoming.certificateWarningLevel),
             certificateDaysRemaining: winner.certificateDaysRemaining ?? existing.certificateDaysRemaining ?? incoming.certificateDaysRemaining,
             lastMonitoredAt: [existing.lastMonitoredAt, incoming.lastMonitoredAt].compactMap { $0 }.max(),
-            lastAlertAt: [existing.lastAlertAt, incoming.lastAlertAt].compactMap { $0 }.max()
+            lastAlertAt: [existing.lastAlertAt, incoming.lastAlertAt].compactMap { $0 }.max(),
+            monitoringState: preferredMonitoringState(existing.monitoringState, incoming.monitoringState),
+            pendingMonitoringAlerts: deduplicatedPendingAlerts(existing.pendingMonitoringAlerts + incoming.pendingMonitoringAlerts)
         )
     }
 
@@ -1272,8 +1276,28 @@ enum DomainDataPortabilityService {
             certificateWarningLevel: trackedDomain.certificateWarningLevel,
             certificateDaysRemaining: trackedDomain.certificateDaysRemaining,
             lastMonitoredAt: trackedDomain.lastMonitoredAt,
-            lastAlertAt: trackedDomain.lastAlertAt
+            lastAlertAt: trackedDomain.lastAlertAt,
+            monitoringState: trackedDomain.monitoringState,
+            pendingMonitoringAlerts: trackedDomain.pendingMonitoringAlerts
         )
+    }
+
+    private static func preferredMonitoringState(_ lhs: MonitoringState, _ rhs: MonitoringState) -> MonitoringState {
+        let lhsDate = [lhs.lastCheck, lhs.lastAlertDate, lhs.lastChangeDate].compactMap { $0 }.max() ?? .distantPast
+        let rhsDate = [rhs.lastCheck, rhs.lastAlertDate, rhs.lastChangeDate].compactMap { $0 }.max() ?? .distantPast
+        return lhsDate >= rhsDate ? lhs : rhs
+    }
+
+    private static func deduplicatedPendingAlerts(_ alerts: [MonitoringPendingAlert]) -> [MonitoringPendingAlert] {
+        var uniqueByHash: [String: MonitoringPendingAlert] = [:]
+        for alert in alerts {
+            if let existing = uniqueByHash[alert.changeHash] {
+                uniqueByHash[alert.changeHash] = existing.detectedAt >= alert.detectedAt ? existing : alert
+            } else {
+                uniqueByHash[alert.changeHash] = alert
+            }
+        }
+        return uniqueByHash.values.sorted { $0.detectedAt < $1.detectedAt }
     }
 
     private static func normalizedWorkflow(_ workflow: DomainWorkflow) -> DomainWorkflow {

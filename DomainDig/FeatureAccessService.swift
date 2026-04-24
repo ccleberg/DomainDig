@@ -3,7 +3,7 @@ import Foundation
 enum FeatureTier: String, Codable, CaseIterable, Identifiable {
     case free
     case pro
-    case dataPlus
+    case proPlus = "dataPlus"
 
     var id: String { rawValue }
 
@@ -13,8 +13,8 @@ enum FeatureTier: String, Codable, CaseIterable, Identifiable {
             return "Free"
         case .pro:
             return "Pro"
-        case .dataPlus:
-            return "Data+"
+        case .proPlus:
+            return "Pro+"
         }
     }
 }
@@ -114,9 +114,9 @@ enum FeatureAccessService {
                 workflowLimit: nil,
                 batchSizeLimit: nil
             )
-        case .dataPlus:
+        case .proPlus:
             return FeatureEntitlements(
-                tier: .dataPlus,
+                tier: .proPlus,
                 capabilities: Set(FeatureCapability.allCases),
                 trackedDomainLimit: effectivelyUnlimitedTrackedDomains,
                 workflowLimit: nil,
@@ -158,7 +158,7 @@ enum FeatureAccessService {
         case .workflows, .batchOperations, .automatedMonitoring, .localAlerts, .advancedExports:
             return "Available in Pro"
         case .ownershipHistory, .dnsHistory, .extendedSubdomains, .domainPricing:
-            return "Available in Data+"
+            return "Available in Pro+"
         case .limitedTracking:
             return "Tracking is limited on Free"
         case .singleLookup, .basicHistory:
@@ -220,7 +220,7 @@ enum FeatureAccessService {
         let title: String
         switch capability {
         case .ownershipHistory, .dnsHistory, .extendedSubdomains, .domainPricing:
-            title = "Available in Data+"
+            title = "Available in Pro+"
         default:
             title = "Available in Pro"
         }

@@ -1453,6 +1453,8 @@ final class CloudSyncService {
             certificateDaysRemaining: trackedDomain.certificateDaysRemaining,
             lastMonitoredAt: trackedDomain.lastMonitoredAt,
             lastAlertAt: trackedDomain.lastAlertAt,
+            monitoringState: trackedDomain.monitoringState,
+            pendingMonitoringAlerts: trackedDomain.pendingMonitoringAlerts,
             collaboration: trackedDomain.collaboration
         )
     }
@@ -1476,6 +1478,8 @@ final class CloudSyncService {
             certificateDaysRemaining: winner.certificateDaysRemaining ?? lhs.certificateDaysRemaining ?? rhs.certificateDaysRemaining,
             lastMonitoredAt: [lhs.lastMonitoredAt, rhs.lastMonitoredAt].compactMap { $0 }.max(),
             lastAlertAt: [lhs.lastAlertAt, rhs.lastAlertAt].compactMap { $0 }.max(),
+            monitoringState: preferredMonitoringState(lhs.monitoringState, rhs.monitoringState),
+            pendingMonitoringAlerts: deduplicatedPendingAlerts(lhs.pendingMonitoringAlerts + rhs.pendingMonitoringAlerts),
             collaboration: preferredCollaboration(lhs.collaboration, rhs.collaboration)
         )
     }
@@ -1499,6 +1503,24 @@ final class CloudSyncService {
             return lhsRank > rhsRank ? lhs : rhs
         }
         return lhs.updatedAt >= rhs.updatedAt ? lhs : rhs
+    }
+
+    private func preferredMonitoringState(_ lhs: MonitoringState, _ rhs: MonitoringState) -> MonitoringState {
+        let lhsDate = [lhs.lastCheck, lhs.lastAlertDate, lhs.lastChangeDate].compactMap { $0 }.max() ?? .distantPast
+        let rhsDate = [rhs.lastCheck, rhs.lastAlertDate, rhs.lastChangeDate].compactMap { $0 }.max() ?? .distantPast
+        return lhsDate >= rhsDate ? lhs : rhs
+    }
+
+    private func deduplicatedPendingAlerts(_ alerts: [MonitoringPendingAlert]) -> [MonitoringPendingAlert] {
+        var uniqueByHash: [String: MonitoringPendingAlert] = [:]
+        for alert in alerts {
+            if let existing = uniqueByHash[alert.changeHash] {
+                uniqueByHash[alert.changeHash] = existing.detectedAt >= alert.detectedAt ? existing : alert
+            } else {
+                uniqueByHash[alert.changeHash] = alert
+            }
+        }
+        return uniqueByHash.values.sorted { $0.detectedAt < $1.detectedAt }
     }
 
     private func preferredWorkflow(_ lhs: DomainWorkflow, _ rhs: DomainWorkflow) -> DomainWorkflow {

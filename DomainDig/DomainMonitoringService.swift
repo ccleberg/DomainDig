@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import CryptoKit
 
 #if canImport(BackgroundTasks)
 import BackgroundTasks
@@ -132,9 +133,10 @@ final class DomainMonitoringScheduler {
         }
         #endif
 
+        let trackedDomains = MonitoringStorage.loadTrackedDomains()
         let request = BGAppRefreshTaskRequest(identifier: Self.taskIdentifier)
         request.earliestBeginDate = Date(
-            timeIntervalSinceNow: max(settings.frequency.schedulingInterval, 15 * 60)
+            timeIntervalSinceNow: max(Self.nextScheduleInterval(settings: settings, trackedDomains: trackedDomains), 15 * 60)
         )
 
         do {
@@ -147,6 +149,38 @@ final class DomainMonitoringScheduler {
         #else
         return "Background monitoring is unavailable on this platform."
         #endif
+    }
+
+    private static func nextScheduleInterval(
+        settings: MonitoringSettings,
+        trackedDomains: [TrackedDomain],
+        now: Date = Date()
+    ) -> TimeInterval {
+        let monitored = MonitoringStorage.monitoredDomains(settings: settings, trackedDomains: trackedDomains)
+        guard !monitored.isEmpty else {
+            return settings.config.sanitizedBaseInterval
+        }
+
+        return monitored
+            .map { trackedDomain in
+                let state = normalizedMonitoringState(for: trackedDomain, settings: settings)
+                guard let lastCheck = trackedDomain.monitoringState.lastCheck else {
+                    return 0
+                }
+                return max(0, lastCheck.addingTimeInterval(state.currentInterval).timeIntervalSince(now))
+            }
+            .min() ?? settings.config.sanitizedBaseInterval
+    }
+
+    static func normalizedMonitoringState(
+        for trackedDomain: TrackedDomain,
+        settings: MonitoringSettings
+    ) -> MonitoringState {
+        var state = trackedDomain.monitoringState
+        if state.currentInterval <= 0 {
+            state.currentInterval = settings.config.sanitizedBaseInterval
+        }
+        return state
     }
 
 #if canImport(BackgroundTasks)
@@ -174,6 +208,7 @@ final class DomainMonitoringService {
 
     private let inspectionService = DomainInspectionService()
     private let maxHistoryEntries = 250
+    private let calendar = Calendar.current
 
     func performMonitoring(
         trigger: MonitoringRunTrigger,
@@ -200,9 +235,9 @@ final class DomainMonitoringService {
 
         var history = MonitoringStorage.loadHistoryEntries()
         var mutableTrackedDomains = trackedDomains
-        let eligibleDomains = MonitoringStorage.monitoredDomains(settings: settings, trackedDomains: mutableTrackedDomains)
+        let monitoredDomains = MonitoringStorage.monitoredDomains(settings: settings, trackedDomains: mutableTrackedDomains)
 
-        guard !eligibleDomains.isEmpty else {
+        guard !monitoredDomains.isEmpty else {
             let log = MonitoringLog(
                 timestamp: Date(),
                 trigger: trigger,
@@ -216,6 +251,24 @@ final class DomainMonitoringService {
             return MonitoringRunOutcome(success: false, message: "No domains selected for monitoring.", log: log)
         }
 
+        let eligibleDomains = monitoredDomains.filter { trackedDomain in
+            shouldInspect(trackedDomain: trackedDomain, trigger: trigger, settings: settings)
+        }
+
+        guard !eligibleDomains.isEmpty else {
+            let log = MonitoringLog(
+                timestamp: Date(),
+                trigger: trigger,
+                domainsChecked: 0,
+                changesFound: 0,
+                alertsTriggered: 0,
+                checkedDomains: [],
+                errors: []
+            )
+            saveLog(log)
+            return MonitoringRunOutcome(success: true, message: "No domains are due for monitoring.", log: log)
+        }
+
         let notificationsAuthorized: Bool
         if settings.alertsEnabled {
             notificationsAuthorized = await LocalNotificationService.shared.isAuthorizedForAlerts()
@@ -225,6 +278,7 @@ final class DomainMonitoringService {
         var results: [MonitoringDomainResult] = []
         var errors: [String] = []
         var alertsTriggered = 0
+        let now = Date()
 
         for trackedDomain in eligibleDomains {
             guard !Task.isCancelled else {
@@ -252,33 +306,32 @@ final class DomainMonitoringService {
             let alertDescriptor = alertDescriptor(
                 previousSnapshot: previousSnapshot,
                 snapshot: snapshot,
-                entry: savedEntry
+                entry: savedEntry,
+                sensitivity: settings.sensitivity
             )
 
             if let index = mutableTrackedDomains.firstIndex(where: { $0.id == trackedDomain.id }) {
-                mutableTrackedDomains[index].lastMonitoredAt = Date()
-            }
-
-            if notificationsAuthorized,
-               let alertDescriptor,
-               alertDescriptor.severity >= settings.alertFilter.minimumSeverity {
-                await LocalNotificationService.shared.notifyMonitoringAlert(
-                    domain: trackedDomain.domain,
-                    message: alertDescriptor.message,
-                    severity: alertDescriptor.severity
+                mutableTrackedDomains[index].lastMonitoredAt = now
+                let outcome = await processAdaptiveMonitoringState(
+                    trackedDomain: mutableTrackedDomains[index],
+                    snapshot: snapshot,
+                    previousSnapshot: previousSnapshot,
+                    alertDescriptor: alertDescriptor,
+                    settings: settings,
+                    notificationsAuthorized: notificationsAuthorized,
+                    now: now
                 )
-                alertsTriggered += 1
-                if let index = mutableTrackedDomains.firstIndex(where: { $0.id == trackedDomain.id }) {
-                    mutableTrackedDomains[index].lastAlertAt = Date()
-                }
+                mutableTrackedDomains[index] = outcome.trackedDomain
+                alertsTriggered += outcome.alertsTriggered
             }
 
             let result = MonitoringDomainResult(
                 domain: trackedDomain.domain,
                 historyEntryID: savedEntry?.id ?? snapshot.historyEntryID,
-                checkedAt: Date(),
-                didChange: snapshot.statusMessage == nil && savedEntry?.changeSummary?.hasChanges == true,
+                checkedAt: now,
+                didChange: alertDescriptor != nil,
                 summaryMessage: snapshot.statusMessage
+                    ?? alertDescriptor?.message
                     ?? savedEntry?.changeSummary?.message
                     ?? "No meaningful changes",
                 alertSeverity: alertDescriptor?.severity,
@@ -431,54 +484,283 @@ final class DomainMonitoringService {
         return entry
     }
 
+    private func shouldInspect(
+        trackedDomain: TrackedDomain,
+        trigger: MonitoringRunTrigger,
+        settings: MonitoringSettings
+    ) -> Bool {
+        guard trigger == .background else { return true }
+        guard let lastCheck = trackedDomain.monitoringState.lastCheck else { return true }
+        let state = DomainMonitoringScheduler.normalizedMonitoringState(for: trackedDomain, settings: settings)
+        return lastCheck.addingTimeInterval(state.currentInterval) <= Date()
+    }
+
+    private func processAdaptiveMonitoringState(
+        trackedDomain: TrackedDomain,
+        snapshot: LookupSnapshot,
+        previousSnapshot: LookupSnapshot?,
+        alertDescriptor: MonitoringAlertDescriptor?,
+        settings: MonitoringSettings,
+        notificationsAuthorized: Bool,
+        now: Date
+    ) async -> (trackedDomain: TrackedDomain, alertsTriggered: Int) {
+        var updated = trackedDomain
+        var state = DomainMonitoringScheduler.normalizedMonitoringState(for: trackedDomain, settings: settings)
+        let baseInterval = settings.config.sanitizedBaseInterval
+        let minInterval = settings.sensitivity.minimumInterval
+        let maxInterval = settings.config.maxInterval
+        let isQuiet = settings.quietHours?.contains(now, calendar: calendar) == true
+        var alertsTriggered = 0
+
+        if let alertDescriptor {
+            if state.lastChangeHash != alertDescriptor.changeHash {
+                state.lastChangeHash = alertDescriptor.changeHash
+                state.lastChangeDate = now
+                state.consecutiveStableChecks = 0
+                state.currentInterval = settings.adaptiveEnabled ? minInterval : baseInterval
+
+                if settings.alertsEnabled,
+                   alertDescriptor.severity >= settings.alertFilter.minimumSeverity {
+                    let pendingAlert = MonitoringPendingAlert(
+                        detectedAt: now,
+                        message: alertDescriptor.message,
+                        severity: alertDescriptor.severity,
+                        changeHash: alertDescriptor.changeHash
+                    )
+
+                    if isQuiet || !notificationsAuthorized {
+                        updated.pendingMonitoringAlerts = deduplicatedPendingAlerts(
+                            updated.pendingMonitoringAlerts + [pendingAlert]
+                        )
+                    } else {
+                        let pendingAlerts = deduplicatedPendingAlerts(
+                            updated.pendingMonitoringAlerts + [pendingAlert]
+                        )
+                        if pendingAlerts.count > 1 {
+                            await LocalNotificationService.shared.notifyMonitoringSummary(
+                                domain: trackedDomain.domain,
+                                alerts: pendingAlerts
+                            )
+                        } else {
+                            await LocalNotificationService.shared.notifyMonitoringAlert(
+                                domain: trackedDomain.domain,
+                                message: alertDescriptor.message,
+                                severity: alertDescriptor.severity
+                            )
+                        }
+                        alertsTriggered += 1
+                        updated.pendingMonitoringAlerts = []
+                        updated.lastAlertAt = now
+                        state.lastAlertDate = now
+                    }
+                }
+            }
+        } else {
+            state.consecutiveStableChecks += 1
+            if settings.adaptiveEnabled {
+                state.currentInterval = max(
+                    baseInterval,
+                    min(maxInterval, state.currentInterval * settings.sensitivity.intervalMultiplier)
+                )
+            } else {
+                state.currentInterval = baseInterval
+            }
+        }
+
+        if !isQuiet,
+           settings.alertsEnabled,
+           notificationsAuthorized,
+           !updated.pendingMonitoringAlerts.isEmpty,
+           alertDescriptor == nil {
+            await LocalNotificationService.shared.notifyMonitoringSummary(
+                domain: trackedDomain.domain,
+                alerts: updated.pendingMonitoringAlerts
+            )
+            alertsTriggered += 1
+            updated.pendingMonitoringAlerts = []
+            updated.lastAlertAt = now
+            state.lastAlertDate = now
+        }
+
+        state.lastCheck = now
+        updated.monitoringState = state
+        return (updated, alertsTriggered)
+    }
+
+    private func deduplicatedPendingAlerts(_ alerts: [MonitoringPendingAlert]) -> [MonitoringPendingAlert] {
+        var uniqueByHash: [String: MonitoringPendingAlert] = [:]
+        for alert in alerts {
+            if let existing = uniqueByHash[alert.changeHash] {
+                uniqueByHash[alert.changeHash] = existing.detectedAt >= alert.detectedAt ? existing : alert
+            } else {
+                uniqueByHash[alert.changeHash] = alert
+            }
+        }
+        return uniqueByHash.values.sorted { $0.detectedAt < $1.detectedAt }
+    }
+
+    private struct MonitoringAlertDescriptor {
+        let severity: MonitoringAlertSeverity
+        let message: String
+        let changeHash: String
+    }
+
+    private struct HeaderFingerprint: Encodable, Equatable {
+        let name: String
+        let value: String
+    }
+
     private func alertDescriptor(
         previousSnapshot: LookupSnapshot?,
         snapshot: LookupSnapshot,
-        entry: HistoryEntry?
-    ) -> (severity: MonitoringAlertSeverity, message: String)? {
+        entry: HistoryEntry?,
+        sensitivity: MonitoringSensitivity
+    ) -> MonitoringAlertDescriptor? {
+        guard let previousSnapshot else { return nil }
+        let previousHash = monitoringHash(for: previousSnapshot, sensitivity: sensitivity)
+        let currentHash = monitoringHash(for: snapshot, sensitivity: sensitivity)
+        guard previousHash != currentHash else { return nil }
+
         let changedLabels = Set(
-            (previousSnapshot.map { DomainDiffService.diff(from: $0, to: snapshot) } ?? [])
+            DomainDiffService.diff(from: previousSnapshot, to: snapshot)
                 .flatMap(\.items)
                 .filter(\.hasChanges)
                 .map(\.label)
         )
 
-        if changedLabels.contains("Availability") {
-            return (.critical, "Availability changed")
-        }
-        if changedLabels.contains("Primary IP") {
-            return (.critical, "Primary IP changed")
-        }
-        if changedLabels.contains("Redirect Target") {
-            return (.critical, "Redirect target changed")
-        }
-
-        let ownershipLabels: Set<String> = [
-            "Registrar",
-            "Registration Date",
-            "Expiration Date",
-            "Ownership Status",
-            "Abuse Contact"
-        ]
-        if !changedLabels.isDisjoint(with: ownershipLabels) {
-            return (.warning, "Ownership changed")
-        }
         if changedLabels.contains("Nameservers") || changedLabels.contains(where: { $0.hasSuffix("Records") }) {
-            return (.warning, "DNS changed")
+            return MonitoringAlertDescriptor(severity: .warning, message: "DNS records changed", changeHash: currentHash)
         }
 
-        let oldCertificateLevel = previousSnapshot.map { DomainDiffService.certificateWarningLevel(for: $0) } ?? .none
+        let oldCertificateLevel = DomainDiffService.certificateWarningLevel(for: previousSnapshot)
         let newCertificateLevel = DomainDiffService.certificateWarningLevel(for: snapshot)
-        if newCertificateLevel != .none, newCertificateLevel != oldCertificateLevel {
-            let daysRemaining = snapshot.sslInfo?.daysUntilExpiry ?? 0
-            return (.warning, "Certificate expires in \(daysRemaining) days")
+        if snapshot.sslInfo?.issuer != previousSnapshot.sslInfo?.issuer
+            || snapshot.sslInfo?.validUntil != previousSnapshot.sslInfo?.validUntil
+            || (newCertificateLevel != .none && newCertificateLevel != oldCertificateLevel) {
+            return MonitoringAlertDescriptor(severity: .warning, message: "Certificate updated", changeHash: currentHash)
         }
 
-        if entry?.changeSummary?.hasChanges == true, let message = entry?.changeSummary?.message {
-            return (.info, message)
+        if sensitivity != .low,
+           previousSnapshot.redirectChain.map(\.url) != snapshot.redirectChain.map(\.url)
+            || previousSnapshot.redirectChain.map(\.statusCode) != snapshot.redirectChain.map(\.statusCode) {
+            return MonitoringAlertDescriptor(severity: .warning, message: "Redirect chain changed", changeHash: currentHash)
+        }
+
+        if sensitivity != .low,
+           filteredHTTPHeaders(previousSnapshot.httpHeaders, sensitivity: sensitivity)
+            != filteredHTTPHeaders(snapshot.httpHeaders, sensitivity: sensitivity) {
+            return MonitoringAlertDescriptor(severity: .info, message: "HTTP headers changed", changeHash: currentHash)
+        }
+
+        if sensitivity == .high,
+           entry?.changeSummary?.hasChanges == true,
+           let message = entry?.changeSummary?.message {
+            return MonitoringAlertDescriptor(severity: .info, message: message, changeHash: currentHash)
         }
 
         return nil
+    }
+
+    private func monitoringHash(for snapshot: LookupSnapshot, sensitivity: MonitoringSensitivity) -> String {
+        struct DNSRecordPayload: Encodable {
+            let type: String
+            let records: [String]
+            let wildcardRecords: [String]
+        }
+
+        struct CertificatePayload: Encodable {
+            let issuer: String?
+            let commonName: String?
+            let validUntil: Date?
+        }
+
+        struct RedirectPayload: Encodable {
+            let url: String
+            let statusCode: Int
+        }
+
+        struct HeaderPayload: Encodable {
+            let name: String
+            let value: String
+        }
+
+        struct MonitoringHashPayload: Encodable {
+            let dns: [DNSRecordPayload]
+            let certificate: CertificatePayload
+            let headers: [HeaderPayload]
+            let redirects: [RedirectPayload]
+        }
+
+        let payload = MonitoringHashPayload(
+            dns: snapshot.dnsSections
+                .sorted { $0.recordType.rawValue < $1.recordType.rawValue }
+                .map { section in
+                    DNSRecordPayload(
+                        type: section.recordType.rawValue,
+                        records: section.records
+                            .sorted { lhs, rhs in
+                                lhs.value == rhs.value ? lhs.ttl < rhs.ttl : lhs.value < rhs.value
+                            }
+                            .map { "\($0.value)|\($0.ttl)" },
+                        wildcardRecords: section.wildcardRecords
+                            .sorted { lhs, rhs in
+                                lhs.value == rhs.value ? lhs.ttl < rhs.ttl : lhs.value < rhs.value
+                            }
+                            .map { "\($0.value)|\($0.ttl)" }
+                    )
+                },
+            certificate: CertificatePayload(
+                issuer: snapshot.sslInfo?.issuer,
+                commonName: snapshot.sslInfo?.commonName,
+                validUntil: snapshot.sslInfo?.validUntil
+            ),
+            headers: filteredHTTPHeaders(snapshot.httpHeaders, sensitivity: sensitivity).map {
+                HeaderPayload(name: $0.name, value: $0.value)
+            },
+            redirects: sensitivity == .low ? [] : snapshot.redirectChain.map {
+                RedirectPayload(url: $0.url, statusCode: $0.statusCode)
+            }
+        )
+
+        let encoder = JSONEncoder()
+        if #available(iOS 11.0, macOS 10.13, *) {
+            encoder.outputFormatting = [.sortedKeys]
+        }
+        let data = (try? encoder.encode(payload)) ?? Data()
+        return SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    private func filteredHTTPHeaders(
+        _ headers: [HTTPHeader],
+        sensitivity: MonitoringSensitivity
+    ) -> [HeaderFingerprint] {
+        let mediumHeaderNames: Set<String> = [
+            "cache-control",
+            "content-security-policy",
+            "location",
+            "permissions-policy",
+            "referrer-policy",
+            "server",
+            "strict-transport-security",
+            "x-content-type-options",
+            "x-frame-options"
+        ]
+
+        return headers
+            .filter { header in
+                switch sensitivity {
+                case .low:
+                    return false
+                case .medium:
+                    return mediumHeaderNames.contains(header.name.lowercased())
+                case .high:
+                    return true
+                }
+            }
+            .map { HeaderFingerprint(name: $0.name.lowercased(), value: $0.value) }
+            .sorted { lhs, rhs in
+                lhs.name == rhs.name ? lhs.value < rhs.value : lhs.name < rhs.name
+            }
     }
 
     private static func resolvedSnapshotAfterFallback(

@@ -78,6 +78,35 @@ final class LocalNotificationService {
         )
     }
 
+    func notifyMonitoringSummary(
+        domain: String,
+        alerts: [MonitoringPendingAlert]
+    ) async {
+        let summary = alerts
+            .sorted { $0.detectedAt < $1.detectedAt }
+            .prefix(2)
+            .map(\.message)
+            .joined(separator: " • ")
+        let body: String
+        if alerts.count <= 1 {
+            body = alerts.first?.message ?? "Monitoring change detected"
+        } else if summary.isEmpty {
+            body = "\(alerts.count) monitoring changes detected"
+        } else {
+            body = "\(alerts.count) monitoring changes: \(summary)"
+        }
+
+        let severity = alerts.map(\.severity).max() ?? .info
+        let interruptionLevel: UNNotificationInterruptionLevel = severity == .critical ? .timeSensitive : .active
+
+        await schedule(
+            identifier: "monitoring-summary-\(domain)-\(UUID().uuidString)",
+            title: domain,
+            body: body,
+            interruptionLevel: interruptionLevel
+        )
+    }
+
     func notifySweepComplete(summary: BatchSweepSummary) async {
         let body = "\(summary.changedDomains) changed, \(summary.warningDomains) warnings, \(summary.unchangedDomains) unchanged"
         await schedule(

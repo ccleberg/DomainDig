@@ -6,6 +6,10 @@ struct WatchlistView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var purchaseService = PurchaseService.shared
     @State private var showWorkflowAddSheet = false
+    @State private var showAddDomainSheet = false
+    @State private var newTrackedDomain = ""
+    @State private var addDomainError: String?
+    @FocusState private var isAddDomainFieldFocused: Bool
 
     private var pinnedDomains: [TrackedDomain] {
         viewModel.filteredTrackedDomains.filter(\.isPinned)
@@ -53,7 +57,8 @@ struct WatchlistView: View {
                         title: "No Tracked Domains",
                         message: "Track important domains locally so you can refresh them quickly and see status changes at a glance.",
                         suggestion: "Run an inspection and use the Track action on a domain you care about.",
-                        systemImage: "eye"
+                        systemImage: "eye",
+                        showsCardBackground: false
                     )
                 }
                 .listRowBackground(Color(.systemGray6).opacity(0.5))
@@ -82,8 +87,16 @@ struct WatchlistView: View {
         .navigationTitle("Watchlist")
         .searchable(text: $viewModel.watchlistSearchText, prompt: "Search tracked domains")
         .toolbar {
-            if !viewModel.filteredTrackedDomains.isEmpty {
-                ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    addDomainError = nil
+                    newTrackedDomain = ""
+                    showAddDomainSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+
+                if !viewModel.filteredTrackedDomains.isEmpty {
                     Menu {
                         Picker("Filter", selection: $viewModel.watchlistFilter) {
                             ForEach(WatchlistFilterOption.allCases) { option in
@@ -138,6 +151,52 @@ struct WatchlistView: View {
         }
         .sheet(item: batchSummaryBinding) { summary in
             BatchSweepSummaryView(viewModel: viewModel, summary: summary)
+        }
+        .sheet(isPresented: $showAddDomainSheet) {
+            NavigationStack {
+                Form {
+                    Section("Domain") {
+                        TextField("example.com", text: $newTrackedDomain)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .textContentType(.URL)
+                            .focused($isAddDomainFieldFocused)
+                            .onSubmit(addTrackedDomain)
+                    }
+
+                    Section {
+                        Text("Adds the domain directly to your watchlist so monitoring can run without a prior inspection.")
+                            .font(appDensity.font(.caption))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let addDomainError {
+                        Section {
+                            Text(addDomainError)
+                                .font(appDensity.font(.caption))
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+                .navigationTitle("Add Domain")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showAddDomainSheet = false
+                        }
+                    }
+
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Add", action: addTrackedDomain)
+                    }
+                }
+                .onAppear {
+                    DispatchQueue.main.async {
+                        isAddDomainFieldFocused = true
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showWorkflowAddSheet) {
             WorkflowBulkAddSheet(
@@ -270,6 +329,24 @@ struct WatchlistView: View {
         }
 
         ExportPresenter.share(filename: filename, data: data)
+    }
+
+    private func addTrackedDomain() {
+        let draft = newTrackedDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.isEmpty else {
+            addDomainError = "Enter a domain to add."
+            return
+        }
+
+        if viewModel.trackDomain(domain: draft, availabilityStatus: nil) {
+            AppHaptics.track()
+            isAddDomainFieldFocused = false
+            addDomainError = nil
+            newTrackedDomain = ""
+            showAddDomainSheet = false
+        } else if viewModel.upgradePrompt == nil {
+            addDomainError = "Enter a valid domain like example.com."
+        }
     }
 }
 
@@ -464,6 +541,19 @@ struct TrackedDomainDetailView: View {
                     shareEntity = .trackedDomain(liveTrackedDomain.domain)
                 } label: {
                     Label(liveTrackedDomain.collaboration?.isShared == true ? "Manage Share" : "Share Domain", systemImage: "person.2")
+                }
+            }
+            .listRowBackground(Color(.systemGray6).opacity(0.5))
+
+            Section("Monitoring Status") {
+                LabeledContent("State", value: viewModel.monitoringStatusLabel(for: liveTrackedDomain))
+                LabeledContent("Current Interval", value: viewModel.monitoringIntervalLabel(for: liveTrackedDomain))
+                LabeledContent(
+                    "Last Change",
+                    value: liveTrackedDomain.monitoringState.lastChangeDate?.formatted(date: .abbreviated, time: .shortened) ?? "None"
+                )
+                if !liveTrackedDomain.pendingMonitoringAlerts.isEmpty {
+                    LabeledContent("Queued Alerts", value: "\(liveTrackedDomain.pendingMonitoringAlerts.count)")
                 }
             }
             .listRowBackground(Color(.systemGray6).opacity(0.5))

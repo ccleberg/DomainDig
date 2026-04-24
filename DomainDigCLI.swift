@@ -36,7 +36,6 @@ struct DomainDigCLI {
         let wantsDNSHistory = arguments.contains("--dns-history")
         let wantsExtendedSubdomains = arguments.contains("--extended-subdomains")
         let wantsPricing = arguments.contains("--pricing")
-        let wantsUsage = arguments.contains("--show-usage")
         let domains = arguments.filter { !$0.hasPrefix("-") }
 
         let requestedDomains = domains
@@ -52,8 +51,6 @@ struct DomainDigCLI {
         let reportBuilder = DomainReportBuilder()
         var reports: [DomainReport] = []
         var seen = Set<String>()
-        var usageImpact: [String] = []
-
         for domain in requestedDomains {
             let normalizedDomain = domain.lowercased()
             guard seen.insert(normalizedDomain).inserted else { continue }
@@ -63,8 +60,7 @@ struct DomainDigCLI {
                 wantsOwnershipHistory: wantsOwnershipHistory,
                 wantsDNSHistory: wantsDNSHistory,
                 wantsExtendedSubdomains: wantsExtendedSubdomains,
-                wantsPricing: wantsPricing,
-                usageImpact: &usageImpact
+                wantsPricing: wantsPricing
             )
             reports.append(reportBuilder.build(from: enrichedSnapshot))
         }
@@ -83,9 +79,6 @@ struct DomainDigCLI {
                     title: "DomainDig Batch Report"
                 )
             }
-            if wantsUsage, !usageImpact.isEmpty {
-                FileHandle.standardError.write(Data(("Data+ usage impact: " + usageImpact.joined(separator: ", ") + "\n").utf8))
-            }
             FileHandle.standardOutput.write(data)
             if data.last != 0x0A {
                 FileHandle.standardOutput.write(Data([0x0A]))
@@ -101,10 +94,9 @@ struct DomainDigCLI {
         wantsOwnershipHistory: Bool,
         wantsDNSHistory: Bool,
         wantsExtendedSubdomains: Bool,
-        wantsPricing: Bool,
-        usageImpact: inout [String]
+        wantsPricing: Bool
     ) async -> LookupSnapshot {
-        guard FeatureAccessService.currentTier == .dataPlus else {
+        guard FeatureAccessService.currentTier == .proPlus else {
             return snapshot
         }
 
@@ -118,8 +110,7 @@ struct DomainDigCLI {
         var domainPricing = snapshot.domainPricing
         var domainPricingError = snapshot.domainPricingError
 
-        if wantsOwnershipHistory,
-           await UsageCreditService.shared.canUse(.ownershipHistory) {
+        if wantsOwnershipHistory {
             let outcome = await ExternalDataService.shared.ownershipHistory(
                 domain: snapshot.domain,
                 currentOwnership: snapshot.ownership,
@@ -129,23 +120,14 @@ struct DomainDigCLI {
             case let .success(events):
                 ownershipHistory = events
                 ownershipHistoryError = nil
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.ownershipHistory)
-                    usageImpact.append("ownership history -1")
-                }
             case let .empty(message):
                 ownershipHistoryError = message
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.ownershipHistory)
-                    usageImpact.append("ownership history -1")
-                }
             case let .error(message):
                 ownershipHistoryError = message
             }
         }
 
-        if wantsDNSHistory,
-           await UsageCreditService.shared.canUse(.dnsHistory) {
+        if wantsDNSHistory {
             let outcome = await ExternalDataService.shared.dnsHistory(
                 domain: snapshot.domain,
                 dnsSections: snapshot.dnsSections,
@@ -155,23 +137,14 @@ struct DomainDigCLI {
             case let .success(events):
                 dnsHistory = events
                 dnsHistoryError = nil
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.dnsHistory)
-                    usageImpact.append("dns history -1")
-                }
             case let .empty(message):
                 dnsHistoryError = message
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.dnsHistory)
-                    usageImpact.append("dns history -1")
-                }
             case let .error(message):
                 dnsHistoryError = message
             }
         }
 
-        if wantsExtendedSubdomains,
-           await UsageCreditService.shared.canUse(.extendedSubdomains) {
+        if wantsExtendedSubdomains {
             let outcome = await ExternalDataService.shared.extendedSubdomains(
                 domain: snapshot.domain,
                 existing: snapshot.subdomains
@@ -180,16 +153,8 @@ struct DomainDigCLI {
             case let .success(results):
                 extendedSubdomains = results
                 extendedSubdomainsError = nil
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.extendedSubdomains)
-                    usageImpact.append("extended subdomains -1")
-                }
             case let .empty(message):
                 extendedSubdomainsError = message
-                if outcome.source != .cached {
-                    _ = await UsageCreditService.shared.consume(.extendedSubdomains)
-                    usageImpact.append("extended subdomains -1")
-                }
             case let .error(message):
                 extendedSubdomainsError = message
             }
@@ -538,7 +503,7 @@ struct DomainDigCLI {
 
     private static var usageText: String {
         """
-        usage: domaindig <domain> [--json] [--ownership-history] [--dns-history] [--extended-subdomains] [--pricing] [--show-usage]
+        usage: domaindig <domain> [--json] [--ownership-history] [--dns-history] [--extended-subdomains] [--pricing]
                domaindig history <domain> [--json]
                domaindig diff <domain> --from <id> --to <id> [--json]
                domaindig monitor [--json]

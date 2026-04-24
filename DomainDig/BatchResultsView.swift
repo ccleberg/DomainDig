@@ -72,12 +72,25 @@ struct BatchResultRowView: View {
             }
 
             HStack(spacing: 10) {
-                AppStatusBadgeView(model: AppStatusFactory.availability(result.availability))
+                AppStatusBadgeView(model: availabilityBadgeModel)
                 if let riskScore = result.riskScore, let riskLevel = result.riskLevel {
                     Text("Risk \(riskScore) \(riskLevel.title)")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
+            }
+            .font(appDensity.font(.caption2))
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 10) {
                 Text(result.primaryIP ?? "No IP")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 8)
+
                 Text(result.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    .lineLimit(1)
             }
             .font(appDensity.font(.caption2))
             .foregroundStyle(.secondary)
@@ -114,6 +127,19 @@ struct BatchResultRowView: View {
         case .unknown, .none:
             return "Unknown"
         }
+    }
+
+    private var availabilityBadgeModel: AppStatusBadgeModel {
+        guard result.status == .failed else {
+            return AppStatusFactory.availability(result.availability)
+        }
+
+        return .init(
+            title: availabilityText,
+            systemImage: "exclamationmark.circle",
+            foregroundColor: .secondary,
+            backgroundColor: Color(.systemGray5).opacity(0.55)
+        )
     }
 
     private var quickStatusBadge: AppStatusBadgeModel {

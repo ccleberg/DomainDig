@@ -756,6 +756,7 @@ final class DomainViewModel {
     func clearHistory() {
         history.removeAll()
         persistHistory()
+        clearMonitoringLogs()
         refreshDataLifecycleSummary()
     }
 
@@ -779,6 +780,7 @@ final class DomainViewModel {
         refreshingTrackedDomainID = nil
         persistTrackedDomains()
         sanitizeMonitoringSelection()
+        clearMonitoringLogs()
         refreshDataLifecycleSummary()
     }
 
@@ -842,14 +844,43 @@ final class DomainViewModel {
         persistMonitoringSettings(localActivationConfirmed: monitoringSettings.isEnabled)
     }
 
-    func setMonitoringFrequency(_ frequency: MonitoringFrequency) {
+    func setMonitoringBaseInterval(_ baseInterval: MonitoringBaseInterval) {
         guard FeatureAccessService.hasAccess(to: .automatedMonitoring) else {
             upgradePrompt = FeatureAccessService.upgradePrompt(for: .automatedMonitoring)
             return
         }
-        monitoringSettings.frequency = frequency
+        monitoringSettings.baseInterval = baseInterval.interval
         persistMonitoringSettings(localActivationConfirmed: monitoringSettings.isEnabled)
         monitoringStatusMessage = DomainMonitoringScheduler.shared.syncSchedule()
+    }
+
+    func setMonitoringAdaptiveEnabled(_ isEnabled: Bool) {
+        guard FeatureAccessService.hasAccess(to: .automatedMonitoring) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .automatedMonitoring)
+            return
+        }
+        monitoringSettings.adaptiveEnabled = isEnabled
+        persistMonitoringSettings(localActivationConfirmed: monitoringSettings.isEnabled)
+        monitoringStatusMessage = DomainMonitoringScheduler.shared.syncSchedule()
+    }
+
+    func setMonitoringSensitivity(_ sensitivity: MonitoringSensitivity) {
+        guard FeatureAccessService.hasAccess(to: .automatedMonitoring) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .automatedMonitoring)
+            return
+        }
+        monitoringSettings.sensitivity = sensitivity
+        persistMonitoringSettings(localActivationConfirmed: monitoringSettings.isEnabled)
+        monitoringStatusMessage = DomainMonitoringScheduler.shared.syncSchedule()
+    }
+
+    func setMonitoringQuietHours(startHour: Int, endHour: Int, isEnabled: Bool) {
+        guard FeatureAccessService.hasAccess(to: .automatedMonitoring) else {
+            upgradePrompt = FeatureAccessService.upgradePrompt(for: .automatedMonitoring)
+            return
+        }
+        monitoringSettings.quietHours = isEnabled ? QuietHours(startHour: startHour, endHour: endHour) : nil
+        persistMonitoringSettings(localActivationConfirmed: monitoringSettings.isEnabled)
     }
 
     func setMonitoringAlertFilter(_ filter: MonitoringAlertFilter) {
@@ -928,6 +959,30 @@ final class DomainViewModel {
         }
     }
 
+    func monitoringIntervalLabel(for trackedDomain: TrackedDomain) -> String {
+        let state = DomainMonitoringScheduler.normalizedMonitoringState(for: trackedDomain, settings: monitoringSettings)
+        return Self.intervalLabel(for: state.currentInterval)
+    }
+
+    func monitoringStatusLabel(for trackedDomain: TrackedDomain) -> String {
+        let state = trackedDomain.monitoringState
+        if let lastChangeDate = state.lastChangeDate,
+           Date().timeIntervalSince(lastChangeDate) <= 6 * 60 * 60 {
+            return "Recently Changed"
+        }
+        if state.consecutiveStableChecks >= 2 {
+            return "Stable"
+        }
+        return trackedDomain.monitoringEnabled ? "Active" : "Paused"
+    }
+
+    private static func intervalLabel(for interval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = interval < 3600 ? [.minute] : [.hour, .minute]
+        formatter.unitsStyle = .full
+        return formatter.string(from: interval) ?? "Unknown"
+    }
+
     func rerunLookup(from entry: HistoryEntry, useSnapshotResolver: Bool) {
         if useSnapshotResolver {
             UserDefaults.standard.set(entry.resolverURLString, forKey: DNSResolverOption.userDefaultsKey)
@@ -953,6 +1008,22 @@ final class DomainViewModel {
     }
 
     func reset() {
+        lookupTask?.cancel()
+        customPortScanTask?.cancel()
+        batchTask?.cancel()
+        hasRun = false
+        searchedDomain = ""
+        lastLookupDurationMs = nil
+        currentDiffSections = []
+        currentChangeSummary = nil
+        ownershipDiff = []
+        currentReport = nil
+        refreshingTrackedDomainID = nil
+        clearBatchState()
+        clearLookupState()
+    }
+
+    func clearPresentedResults() {
         lookupTask?.cancel()
         customPortScanTask?.cancel()
         batchTask?.cancel()
@@ -1222,13 +1293,6 @@ final class DomainViewModel {
         }
         guard ownershipHistory.isEmpty else { return }
 
-        let creditStatus = await UsageCreditService.shared.status(for: .ownershipHistory)
-        guard !creditStatus.isExhausted else {
-            ownershipHistoryError = "No ownership history credits remaining"
-            await refreshUsageCredits()
-            return
-        }
-
         ownershipHistoryLoading = true
         ownershipHistoryError = nil
 
@@ -1242,15 +1306,9 @@ final class DomainViewModel {
         case let .success(events):
             ownershipHistory = events
             ownershipHistoryError = nil
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.ownershipHistory)
-            }
         case let .empty(message):
             ownershipHistory = []
             ownershipHistoryError = message
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.ownershipHistory)
-            }
         case let .error(message):
             ownershipHistory = []
             ownershipHistoryError = conciseExternalMessage(message, fallback: "Ownership history unavailable")
@@ -1258,7 +1316,6 @@ final class DomainViewModel {
 
         ownershipHistoryLoading = false
         _ = saveHistoryEntry(replaceLatest: true)
-        await refreshUsageCredits()
     }
 
     func loadDNSHistory() async {
@@ -1268,13 +1325,6 @@ final class DomainViewModel {
             return
         }
         guard dnsHistory.isEmpty else { return }
-
-        let creditStatus = await UsageCreditService.shared.status(for: .dnsHistory)
-        guard !creditStatus.isExhausted else {
-            dnsHistoryError = "No DNS history credits remaining"
-            await refreshUsageCredits()
-            return
-        }
 
         dnsHistoryLoading = true
         dnsHistoryError = nil
@@ -1289,15 +1339,9 @@ final class DomainViewModel {
         case let .success(events):
             dnsHistory = events
             dnsHistoryError = nil
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.dnsHistory)
-            }
         case let .empty(message):
             dnsHistory = []
             dnsHistoryError = message
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.dnsHistory)
-            }
         case let .error(message):
             dnsHistory = []
             dnsHistoryError = conciseExternalMessage(message, fallback: "DNS history unavailable")
@@ -1305,7 +1349,6 @@ final class DomainViewModel {
 
         dnsHistoryLoading = false
         _ = saveHistoryEntry(replaceLatest: true)
-        await refreshUsageCredits()
     }
 
     func loadExtendedSubdomains() async {
@@ -1315,13 +1358,6 @@ final class DomainViewModel {
             return
         }
         guard extendedSubdomains.isEmpty else { return }
-
-        let creditStatus = await UsageCreditService.shared.status(for: .extendedSubdomains)
-        guard !creditStatus.isExhausted else {
-            extendedSubdomainsError = "No extended subdomain credits remaining"
-            await refreshUsageCredits()
-            return
-        }
 
         extendedSubdomainsLoading = true
         extendedSubdomainsError = nil
@@ -1335,15 +1371,9 @@ final class DomainViewModel {
         case let .success(results):
             extendedSubdomains = results
             extendedSubdomainsError = nil
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.extendedSubdomains)
-            }
         case let .empty(message):
             extendedSubdomains = []
             extendedSubdomainsError = message
-            if outcome.source != .cached {
-                _ = await UsageCreditService.shared.consume(.extendedSubdomains)
-            }
         case let .error(message):
             extendedSubdomains = []
             extendedSubdomainsError = conciseExternalMessage(message, fallback: "Extended subdomains unavailable")
@@ -1351,7 +1381,6 @@ final class DomainViewModel {
 
         extendedSubdomainsLoading = false
         _ = saveHistoryEntry(replaceLatest: true)
-        await refreshUsageCredits()
     }
 
     func refreshUsageCredits() async {
@@ -1525,14 +1554,12 @@ final class DomainViewModel {
         }
 
         guard snapshot.statusMessage == nil else {
-            await refreshUsageCredits()
             return history.first(where: { $0.id == snapshot.historyEntryID })
         }
 
         let saveStartedAt = DomainDebugLog.signpostStart("DomainViewModel.saveHistoryEntry", domain: domain)
         let entry = saveHistoryEntry(replaceLatest: false, reuseCurrentAnalysis: true)
         DomainDebugLog.signpostEnd("DomainViewModel.saveHistoryEntry", start: saveStartedAt, domain: domain)
-        await refreshUsageCredits()
         DomainDebugLog.signpostEnd("DomainViewModel.performLookup", start: lookupStartedAt, domain: domain)
         return entry
     }
@@ -2246,6 +2273,12 @@ final class DomainViewModel {
         CloudSyncService.shared.markMonitoringSettingsChanged(localActivationConfirmed: false)
     }
 
+    private func clearMonitoringLogs() {
+        monitoringLogs.removeAll()
+        monitoringStatusMessage = nil
+        MonitoringStorage.saveLogs([])
+    }
+
     private func updateTrackedDomainAvailability(for domain: String, status: DomainAvailabilityStatus) {
         guard let index = trackedDomains.firstIndex(where: { $0.domain.caseInsensitiveCompare(domain) == .orderedSame }) else {
             return
@@ -2533,14 +2566,9 @@ final class DomainViewModel {
             return
         }
 
-        let entry: HistoryEntry?
-        if payload.snapshot.statusMessage == nil {
-            entry = saveHistoryEntry(from: payload.snapshot, replaceLatest: false, updateCurrentState: false)
-        } else {
-            entry = payload.snapshot.historyEntryID.flatMap { id in
-                history.first(where: { $0.id == id })
-            }
-        }
+        let entry = payload.snapshot.historyEntryID.flatMap { id in
+            history.first(where: { $0.id == id })
+        } ?? saveHistoryEntry(from: payload.snapshot, replaceLatest: false, updateCurrentState: false)
         let certificateWarningLevel = DomainDiffService.certificateWarningLevel(for: payload.snapshot)
         let riskAssessment = entry?.changeSummary?.riskAssessment ?? DomainInsightEngine.analyze(snapshot: payload.snapshot).riskAssessment
         let quickStatus: String
@@ -3568,7 +3596,7 @@ final class DomainViewModel {
                 }
             }
             if !DataAccessService.hasAccess(to: .extendedSubdomains) {
-                lines.append("  Extended subdomain discovery (Data+)")
+                lines.append("  Extended subdomain discovery (Pro+)")
             }
         }
 

@@ -235,6 +235,21 @@ struct EmptyStateCardView: View {
     let message: String
     let suggestion: String
     let systemImage: String
+    let showsCardBackground: Bool
+
+    init(
+        title: String,
+        message: String,
+        suggestion: String,
+        systemImage: String,
+        showsCardBackground: Bool = true
+    ) {
+        self.title = title
+        self.message = message
+        self.suggestion = suggestion
+        self.systemImage = systemImage
+        self.showsCardBackground = showsCardBackground
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: appDensity.metrics.cardSpacing) {
@@ -253,7 +268,7 @@ struct EmptyStateCardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(appDensity.metrics.cardPadding)
-        .background(Color(.systemGray6).opacity(0.45))
+        .background(showsCardBackground ? Color(.systemGray6).opacity(0.45) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
     }
 }

@@ -19,6 +19,11 @@ enum ResultSection: String, Hashable {
     case subdomains
 }
 
+private enum LookupInputField: Hashable {
+    case singleDomain
+    case bulkDomains
+}
+
 private struct WorkflowNavigationTarget: Hashable {
     let workflowID: UUID
 }
@@ -28,7 +33,7 @@ struct ContentView: View {
     @Bindable var viewModel: DomainViewModel
     @State private var purchaseService = PurchaseService.shared
     @State private var navigationPath = NavigationPath()
-    @FocusState private var domainFieldFocused: Bool
+    @FocusState private var focusedInputField: LookupInputField?
     @State private var customPortInput = ""
     @State private var customPortsExpanded = false
     @State private var trackingNoteDraft = ""
@@ -174,13 +179,20 @@ struct ContentView: View {
                         }
                     }
                 }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Dismiss Keyboard") {
+                        focusedInputField = nil
+                    }
+                }
             }
             .navigationDestination(for: WorkflowNavigationTarget.self) { target in
                 WorkflowDetailView(viewModel: viewModel, workflowID: target.workflowID)
             }
         }
         .onAppear {
-            domainFieldFocused = true
+            focusedInputField = .singleDomain
         }
         .task {
             await viewModel.refreshUsageCredits()
@@ -190,7 +202,24 @@ struct ContentView: View {
         }
         .onChange(of: viewModel.rerunNavigationToken) { _, _ in
             navigationPath = NavigationPath()
-            domainFieldFocused = false
+            focusedInputField = nil
+        }
+        .onChange(of: inputMode) { _, newValue in
+            viewModel.clearPresentedResults()
+            focusedInputField = newValue == .single ? .singleDomain : .bulkDomains
+        }
+        .onChange(of: viewModel.domain) { _, newValue in
+            guard inputMode == .single else { return }
+            let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard normalized != viewModel.searchedDomain else { return }
+            guard viewModel.hasRun || !viewModel.batchResults.isEmpty else { return }
+            viewModel.clearPresentedResults()
+        }
+        .onChange(of: viewModel.bulkInput) { _, newValue in
+            guard inputMode == .bulk else { return }
+            let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty || viewModel.hasRun || !viewModel.batchResults.isEmpty else { return }
+            viewModel.clearPresentedResults()
         }
         .sheet(item: $editingTrackedDomain) { trackedDomain in
             NavigationStack {
@@ -257,11 +286,14 @@ struct ContentView: View {
                     .padding(.vertical, appDensity.metrics.controlVerticalPadding)
                     .background(Color(.systemGray6))
                     .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
-                    .focused($domainFieldFocused)
-                    .onSubmit { viewModel.run() }
+                    .focused($focusedInputField, equals: .singleDomain)
+                    .onSubmit {
+                        focusedInputField = nil
+                        viewModel.run()
+                    }
 
                 Button {
-                    domainFieldFocused = false
+                    focusedInputField = nil
                     viewModel.run()
                 } label: {
                     Text("Run")
@@ -298,9 +330,10 @@ struct ContentView: View {
                         .padding(.vertical, appDensity.metrics.controlVerticalPadding)
                         .background(Color(.systemGray6))
                         .clipShape(RoundedRectangle(cornerRadius: appDensity.metrics.cardCornerRadius))
+                        .focused($focusedInputField, equals: .bulkDomains)
 
                         Button {
-                            domainFieldFocused = false
+                            focusedInputField = nil
                             viewModel.runBulkLookup()
                         } label: {
                             Text(viewModel.batchLookupRunning ? "Running Batch…" : "Run Batch")
@@ -568,7 +601,7 @@ struct ContentView: View {
             ForEach(viewModel.recentSearches, id: \.self) { domain in
                 Button {
                     viewModel.domain = domain
-                    domainFieldFocused = false
+                    focusedInputField = nil
                     viewModel.run()
                 } label: {
                     Text(domain)
@@ -822,7 +855,7 @@ struct InsightsSummaryCardView: View {
                 } else {
                     ForEach(Array(insights.enumerated()), id: \.offset) { _, insight in
                         HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: "sparkline")
+                            Image(systemName: "chart.line.uptrend.xyaxis")
                                 .font(appDensity.font(.caption2))
                                 .foregroundStyle(.cyan)
                                 .padding(.top, 2)
@@ -1401,7 +1434,7 @@ struct DomainSectionView: View {
                     MessageRowView(text: pricingError, isError: false)
                         .padding(.top, 4)
                 } else if showsPricingPlaceholder {
-                    MessageRowView(text: "Pricing signals available in Data+", isError: false)
+                    MessageRowView(text: "Pricing signals available in Pro+", isError: false)
                         .padding(.top, 4)
                 }
             }
@@ -1473,8 +1506,8 @@ struct OwnershipSectionView: View {
                                 .font(appDensity.font(.caption))
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            if let historyCreditStatus, let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
-                                Button("Load (\(historyCreditStatus.remaining) left)") {
+                            if let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
+                                Button("Load") {
                                     onLoadHistory()
                                 }
                                 .buttonStyle(.bordered)
@@ -1500,7 +1533,7 @@ struct OwnershipSectionView: View {
                         } else if let historyError {
                             MessageRowView(text: historyError, isError: false)
                         } else if showsHistoryPlaceholder {
-                            MessageRowView(text: "Ownership history available in Data+", isError: false)
+                            MessageRowView(text: "Ownership history available in Pro+", isError: false)
                         }
                     }
                 }
@@ -1565,12 +1598,12 @@ struct SubdomainsSectionView: View {
                 } else if rows.isEmpty {
                     MessageRowView(text: error ?? "No passive subdomains found", isError: false)
                     if showsExtendedPlaceholder {
-                        MessageRowView(text: "Extended subdomain discovery available in Data+", isError: false)
+                        MessageRowView(text: "Extended subdomain discovery available in Pro+", isError: false)
                             .padding(.top, 4)
                     }
                 } else {
-                    if let extendedCreditStatus, let onLoadExtended, extendedCount == 0, !extendedLoading, !showsExtendedPlaceholder {
-                        Button("Load extended results (\(extendedCreditStatus.remaining) left)") {
+                    if let onLoadExtended, extendedCount == 0, !extendedLoading, !showsExtendedPlaceholder {
+                        Button("Load extended results") {
                             onLoadExtended()
                         }
                         .buttonStyle(.bordered)
@@ -1621,7 +1654,7 @@ struct SubdomainsSectionView: View {
                         MessageRowView(text: extendedError, isError: false)
                             .padding(.top, 4)
                     } else if showsExtendedPlaceholder {
-                        MessageRowView(text: "Extended subdomain discovery available in Data+", isError: false)
+                        MessageRowView(text: "Extended subdomain discovery available in Pro+", isError: false)
                             .padding(.top, 4)
                     }
                 }
@@ -1748,8 +1781,8 @@ struct DNSSectionView: View {
                             .font(appDensity.font(.subheadline, weight: .semibold))
                             .foregroundStyle(.cyan)
                         Spacer()
-                        if let historyCreditStatus, let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
-                            Button("Load (\(historyCreditStatus.remaining) left)") {
+                        if let onLoadHistory, history.isEmpty, !historyLoading, !showsHistoryPlaceholder {
+                            Button("Load") {
                                 onLoadHistory()
                             }
                             .buttonStyle(.bordered)
@@ -1782,7 +1815,7 @@ struct DNSSectionView: View {
                     } else if let historyError {
                         MessageRowView(text: historyError, isError: false)
                     } else if showsHistoryPlaceholder {
-                        MessageRowView(text: "DNS history available in Data+", isError: false)
+                        MessageRowView(text: "DNS history available in Pro+", isError: false)
                     }
                 }
             }
@@ -2444,36 +2477,94 @@ struct SettingsView: View {
     @Environment(\.appDensity) private var appDensity
     @Bindable var viewModel: DomainViewModel
     @State private var purchaseService = PurchaseService.shared
-    @State private var cloudSyncService = CloudSyncService.shared
-    @AppStorage(DNSResolverOption.userDefaultsKey)
-    private var storedResolverURL = DNSResolverOption.defaultURLString
-    @AppStorage(AppDensity.userDefaultsKey)
-    private var storedDensity = AppDensity.compact.rawValue
-
-    @State private var resolverOption: DNSResolverOption = .cloudflare
-    @State private var customResolverURL = DNSResolverOption.defaultURLString
-    @State private var showClearHistoryConfirmation = false
-    @State private var showClearCacheConfirmation = false
-    @State private var showClearWorkflowsConfirmation = false
-    @State private var showClearTrackedDomainsConfirmation = false
-    @State private var importMode: DataPortabilityImportMode = .merge
-    @State private var showBackupImporter = false
-    @State private var showTrackedDomainsImporter = false
-    @State private var showWorkflowsImporter = false
-    @State private var pendingImportPreview: DataImportPreview?
-    @State private var pendingImportError: String?
-    @State private var showReplaceImportConfirmation = false
-
-    private var customResolverError: String? {
-        guard resolverOption == .custom else {
-            return nil
-        }
-        return DNSResolverOption.isValidCustomURL(customResolverURL) ? nil : "Resolver URL must start with https://"
-    }
 
     var body: some View {
         let _ = purchaseService.currentTier
 
+        List {
+            Section("Tier") {
+                LabeledContent("Status", value: purchaseService.currentTier.title)
+
+                if purchaseService.currentTier == .free {
+                    Button("Upgrade") {
+                        viewModel.isPaywallPresented = true
+                    }
+                } else {
+                    Button("Manage Subscription") {
+                        Task {
+                            await purchaseService.manageSubscription()
+                        }
+                    }
+                }
+
+                Button(purchaseService.isRestoring ? "Restoring…" : "Restore Purchases") {
+                    Task {
+                        await purchaseService.restorePurchases()
+                    }
+                }
+                .disabled(purchaseService.isRestoring || purchaseService.isPurchasing)
+
+                if let statusMessage = purchaseService.statusMessage {
+                    Text(statusMessage)
+                        .font(appDensity.font(.caption, design: .default))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let errorMessage = purchaseService.errorMessage {
+                    Text(errorMessage)
+                        .font(appDensity.font(.caption, design: .default))
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Preferences") {
+                NavigationLink("Workflows") {
+                    WorkflowsView(viewModel: viewModel)
+                }
+
+                NavigationLink("Display") {
+                    DisplaySettingsView()
+                }
+
+                NavigationLink("History & Network") {
+                    HistoryNetworkSettingsView(viewModel: viewModel)
+                }
+            }
+
+            Section("Services") {
+                NavigationLink("iCloud Sync") {
+                    CloudSyncSettingsView()
+                }
+
+                NavigationLink("Monitoring") {
+                    MonitoringSettingsView(viewModel: viewModel)
+                }
+            }
+
+            Section("Data") {
+                NavigationLink("Import & Export") {
+                    DataPortabilitySettingsView(viewModel: viewModel)
+                }
+
+                NavigationLink("Data Management") {
+                    DataManagementSettingsView(viewModel: viewModel)
+                }
+            }
+
+            Section("About") {
+                NavigationLink("App Info") {
+                    AboutSettingsView()
+                }
+            }
+        }
+        .navigationTitle("More")
+    }
+}
+
+private struct DisplaySettingsView: View {
+    @AppStorage(AppDensity.userDefaultsKey) private var storedDensity = AppDensity.compact.rawValue
+
+    var body: some View {
         Form {
             Section("Display") {
                 Picker("Density", selection: $storedDensity) {
@@ -2482,7 +2573,27 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .navigationTitle("Display")
+    }
+}
 
+private struct HistoryNetworkSettingsView: View {
+    @Environment(\.appDensity) private var appDensity
+    @Bindable var viewModel: DomainViewModel
+    @AppStorage(DNSResolverOption.userDefaultsKey) private var storedResolverURL = DNSResolverOption.defaultURLString
+    @AppStorage(AppDensity.userDefaultsKey) private var storedDensity = AppDensity.compact.rawValue
+
+    @State private var resolverOption: DNSResolverOption = .cloudflare
+    @State private var customResolverURL = DNSResolverOption.defaultURLString
+
+    private var customResolverError: String? {
+        guard resolverOption == .custom else { return nil }
+        return DNSResolverOption.isValidCustomURL(customResolverURL) ? nil : "Resolver URL must start with https://"
+    }
+
+    var body: some View {
+        Form {
             Section("History") {
                 Picker(
                     "Auto-prune",
@@ -2521,7 +2632,51 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .navigationTitle("History & Network")
+        .onAppear {
+            let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            resolverOption = DNSResolverOption.option(for: currentResolverURL)
+            customResolverURL = resolverOption == .custom ? currentResolverURL : DNSResolverOption.defaultURLString
+        }
+        .onChange(of: resolverOption) { _, newValue in
+            guard let presetURL = newValue.urlString else {
+                storedResolverURL = customResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                viewModel.persistCurrentAppSettings(
+                    resolverURLString: storedResolverURL,
+                    appDensityRawValue: storedDensity
+                )
+                return
+            }
+            storedResolverURL = presetURL
+            viewModel.persistCurrentAppSettings(
+                resolverURLString: storedResolverURL,
+                appDensityRawValue: storedDensity
+            )
+        }
+        .onChange(of: customResolverURL) { _, newValue in
+            guard resolverOption == .custom else { return }
+            storedResolverURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            viewModel.persistCurrentAppSettings(
+                resolverURLString: storedResolverURL,
+                appDensityRawValue: storedDensity
+            )
+        }
+        .onChange(of: storedDensity) { _, newValue in
+            viewModel.persistCurrentAppSettings(
+                resolverURLString: storedResolverURL,
+                appDensityRawValue: newValue
+            )
+        }
+    }
+}
 
+private struct CloudSyncSettingsView: View {
+    @Environment(\.appDensity) private var appDensity
+    @State private var cloudSyncService = CloudSyncService.shared
+
+    var body: some View {
+        Form {
             Section("iCloud Sync") {
                 Toggle(
                     "Enable iCloud Sync",
@@ -2558,7 +2713,33 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+        .navigationTitle("iCloud Sync")
+        .task {
+            await cloudSyncService.refreshAvailability()
+        }
+    }
+}
 
+private struct MonitoringSettingsView: View {
+    @Environment(\.appDensity) private var appDensity
+    @Bindable var viewModel: DomainViewModel
+
+    private var notificationAuthorizationLabel: String {
+        switch viewModel.monitoringNotificationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return "Allowed"
+        case .denied:
+            return "Denied"
+        case .notDetermined:
+            return "Not Requested"
+        @unknown default:
+            return "Unknown"
+        }
+    }
+
+    var body: some View {
+        Form {
             Section("Monitoring") {
                 Toggle(
                     "Enable Background Monitoring",
@@ -2569,14 +2750,88 @@ struct SettingsView: View {
                 )
 
                 Picker(
-                    "Frequency",
+                    "Base Interval",
                     selection: Binding(
-                        get: { viewModel.monitoringSettings.frequency },
-                        set: { viewModel.setMonitoringFrequency($0) }
+                        get: { MonitoringBaseInterval.nearest(to: viewModel.monitoringSettings.baseInterval) },
+                        set: { viewModel.setMonitoringBaseInterval($0) }
                     )
                 ) {
-                    ForEach(MonitoringFrequency.allCases) { frequency in
-                        Text(frequency.title).tag(frequency)
+                    ForEach(MonitoringBaseInterval.allCases) { interval in
+                        Text(interval.title).tag(interval)
+                    }
+                }
+
+                Toggle(
+                    "Adaptive Monitoring",
+                    isOn: Binding(
+                        get: { viewModel.monitoringSettings.adaptiveEnabled },
+                        set: { viewModel.setMonitoringAdaptiveEnabled($0) }
+                    )
+                )
+
+                Picker(
+                    "Sensitivity",
+                    selection: Binding(
+                        get: { viewModel.monitoringSettings.sensitivity },
+                        set: { viewModel.setMonitoringSensitivity($0) }
+                    )
+                ) {
+                    ForEach(MonitoringSensitivity.allCases) { sensitivity in
+                        Text(sensitivity.title).tag(sensitivity)
+                    }
+                }
+
+                let quietHoursStart = viewModel.monitoringSettings.quietHours?.startHour ?? 22
+                let quietHoursEnd = viewModel.monitoringSettings.quietHours?.endHour ?? 7
+                Toggle(
+                    "Quiet Hours",
+                    isOn: Binding(
+                        get: { viewModel.monitoringSettings.quietHours != nil },
+                        set: { isEnabled in
+                            viewModel.setMonitoringQuietHours(
+                                startHour: quietHoursStart,
+                                endHour: quietHoursEnd,
+                                isEnabled: isEnabled
+                            )
+                        }
+                    )
+                )
+
+                if viewModel.monitoringSettings.quietHours != nil {
+                    Picker(
+                        "Quiet Starts",
+                        selection: Binding(
+                            get: { quietHoursStart },
+                            set: { startHour in
+                                viewModel.setMonitoringQuietHours(
+                                    startHour: startHour,
+                                    endHour: quietHoursEnd,
+                                    isEnabled: true
+                                )
+                            }
+                        )
+                    ) {
+                        ForEach(0..<24, id: \.self) { hour in
+                            Text(Self.monitoringHourLabel(for: hour)).tag(hour)
+                        }
+                    }
+
+                    Picker(
+                        "Quiet Ends",
+                        selection: Binding(
+                            get: { quietHoursEnd },
+                            set: { endHour in
+                                viewModel.setMonitoringQuietHours(
+                                    startHour: quietHoursStart,
+                                    endHour: endHour,
+                                    isEnabled: true
+                                )
+                            }
+                        )
+                    ) {
+                        ForEach(0..<24, id: \.self) { hour in
+                            Text(Self.monitoringHourLabel(for: hour)).tag(hour)
+                        }
                     }
                 }
 
@@ -2647,8 +2902,65 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .navigationTitle("Monitoring")
+        .onAppear {
+            viewModel.refreshMonitoringState()
+            Task {
+                await viewModel.refreshMonitoringAuthorizationStatus()
+            }
+        }
+    }
 
-            Section("Data Portability") {
+    private static func monitoringHourLabel(for hour: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h a"
+        let components = DateComponents(calendar: .current, hour: hour)
+        return components.date.map(formatter.string(from:)) ?? "\(hour):00"
+    }
+}
+
+private struct DataPortabilitySettingsView: View {
+    private enum ImportTarget {
+        case backup
+        case trackedDomains
+        case workflows
+
+        var expectedKind: DataPortabilityImportKind {
+            switch self {
+            case .backup:
+                return .backup
+            case .trackedDomains:
+                return .trackedDomains
+            case .workflows:
+                return .workflows
+            }
+        }
+
+        var allowedContentTypes: [UTType] {
+            switch self {
+            case .backup:
+                return [UTType.json]
+            case .trackedDomains, .workflows:
+                return [UTType.json, UTType.commaSeparatedText]
+            }
+        }
+    }
+
+    @Environment(\.appDensity) private var appDensity
+    @Bindable var viewModel: DomainViewModel
+
+    @State private var importMode: DataPortabilityImportMode = .merge
+    @State private var activeImportTarget: ImportTarget?
+    @State private var pendingImportTarget: ImportTarget?
+    @State private var importDebugStatus: String?
+    @State private var pendingImportPreview: DataImportPreview?
+    @State private var pendingImportError: String?
+    @State private var showReplaceImportConfirmation = false
+
+    var body: some View {
+        Form {
+            Section("Import & Export") {
                 Picker("Import Mode", selection: $importMode) {
                     ForEach(DataPortabilityImportMode.allCases) { mode in
                         Text(mode.title).tag(mode)
@@ -2664,7 +2976,9 @@ struct SettingsView: View {
                 }
 
                 Button("Import Backup") {
-                    showBackupImporter = true
+                    recordImportDebugStatus("Tapped Import Backup")
+                    pendingImportTarget = .backup
+                    activeImportTarget = .backup
                 }
 
                 Menu("Export Tracked Domains") {
@@ -2677,7 +2991,9 @@ struct SettingsView: View {
                 }
 
                 Button("Import Tracked Domains") {
-                    showTrackedDomainsImporter = true
+                    recordImportDebugStatus("Tapped Import Tracked Domains")
+                    pendingImportTarget = .trackedDomains
+                    activeImportTarget = .trackedDomains
                 }
 
                 Menu("Export Workflows") {
@@ -2690,13 +3006,17 @@ struct SettingsView: View {
                 }
 
                 Button("Import Workflows") {
-                    showWorkflowsImporter = true
+                    recordImportDebugStatus("Tapped Import Workflows")
+                    pendingImportTarget = .workflows
+                    activeImportTarget = .workflows
                 }
 
                 Button("Export History") {
                     exportPortableHistoryJSON()
                 }
+            }
 
+            Section("Local Data") {
                 LabeledContent("Tracked Domains", value: "\(viewModel.dataLifecycleSummary.trackedDomains)")
                 LabeledContent("History Snapshots", value: "\(viewModel.dataLifecycleSummary.historySnapshots)")
                 LabeledContent("Workflows", value: "\(viewModel.dataLifecycleSummary.workflows)")
@@ -2714,121 +3034,18 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Data") {
-                Button("Clear History", role: .destructive) {
-                    showClearHistoryConfirmation = true
-                }
-
-                Button("Clear Cache", role: .destructive) {
-                    showClearCacheConfirmation = true
-                }
-
-                Button("Clear Workflows", role: .destructive) {
-                    showClearWorkflowsConfirmation = true
-                }
-
-                Button("Clear Tracked Domains", role: .destructive) {
-                    showClearTrackedDomainsConfirmation = true
-                }
-            }
-
-            Section("Tier") {
-                LabeledContent("Status", value: purchaseService.currentTier.title)
-
-                if purchaseService.currentTier == .free {
-                    Button("Upgrade") {
-                        viewModel.isPaywallPresented = true
-                    }
-                } else {
-                    Button("Manage Subscription") {
-                        Task {
-                            await purchaseService.manageSubscription()
-                        }
-                    }
-                }
-
-                Button(purchaseService.isRestoring ? "Restoring…" : "Restore Purchases") {
-                    Task {
-                        await purchaseService.restorePurchases()
-                    }
-                }
-                .disabled(purchaseService.isRestoring || purchaseService.isPurchasing)
-
-                if let statusMessage = purchaseService.statusMessage {
-                    Text(statusMessage)
+            #if DEBUG
+            if let importDebugStatus {
+                Section("Import Debug") {
+                    Text(importDebugStatus)
                         .font(appDensity.font(.caption, design: .default))
                         .foregroundStyle(.secondary)
-                }
-
-                if let errorMessage = purchaseService.errorMessage {
-                    Text(errorMessage)
-                        .font(appDensity.font(.caption, design: .default))
-                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
                 }
             }
-
-            Section("Data+ Usage") {
-                ForEach(UsageCreditFeature.allCases) { feature in
-                    let status = viewModel.usageCredits[feature] ?? UsageCreditStatus(
-                        feature: feature,
-                        remaining: feature.defaultAllowance,
-                        total: feature.defaultAllowance,
-                        resetContext: "Resets with app version \(AppVersion.current)"
-                    )
-                    VStack(alignment: .leading, spacing: 2) {
-                        LabeledContent(feature.title, value: status.summary)
-                        Text(status.resetContext)
-                            .font(appDensity.font(.caption, design: .default))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Section("Features") {
-                ForEach(FeatureAccessService.enabledFeatureLabels(), id: \.self) { label in
-                    Text(label)
-                }
-            }
-
-            Section("About") {
-                LabeledContent("Version", value: appVersion)
-                LabeledContent("Storage", value: cloudSyncService.isEnabled ? "Local-first + iCloud" : "Local-only")
-                LabeledContent("Backup Schema", value: "v\(DomainDigBackup.currentSchemaVersion)")
-            }
+            #endif
         }
-        .navigationTitle("Settings")
-        .alert("Clear history?", isPresented: $showClearHistoryConfirmation) {
-            Button("Clear", role: .destructive) {
-                viewModel.clearHistory()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes saved lookup snapshots from this device.")
-        }
-        .alert("Clear cache?", isPresented: $showClearCacheConfirmation) {
-            Button("Clear", role: .destructive) {
-                viewModel.clearLookupCache()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This clears the in-memory lookup cache and cancels any cached in-flight work.")
-        }
-        .alert("Clear workflows?", isPresented: $showClearWorkflowsConfirmation) {
-            Button("Clear", role: .destructive) {
-                viewModel.clearWorkflows()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes saved workflows only. History, tracked domains, and saved reports stay intact.")
-        }
-        .alert("Clear tracked domains?", isPresented: $showClearTrackedDomainsConfirmation) {
-            Button("Clear", role: .destructive) {
-                viewModel.clearTrackedDomains()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the watchlist only. History and workflows stay intact.")
-        }
+        .navigationTitle("Import & Export")
         .alert("Replace local data?", isPresented: $showReplaceImportConfirmation) {
             Button("Replace", role: .destructive) {
                 applyPendingImport()
@@ -2867,83 +3084,24 @@ struct SettingsView: View {
             }
         }
         .fileImporter(
-            isPresented: $showBackupImporter,
-            allowedContentTypes: [UTType.json],
+            isPresented: Binding(
+                get: { activeImportTarget != nil },
+                set: { if !$0 { activeImportTarget = nil } }
+            ),
+            allowedContentTypes: activeImportTarget?.allowedContentTypes ?? [UTType.json],
             allowsMultipleSelection: false
         ) { result in
-            handleImportResult(result, expectedKind: .backup)
-        }
-        .fileImporter(
-            isPresented: $showTrackedDomainsImporter,
-            allowedContentTypes: [UTType.json, UTType.commaSeparatedText],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImportResult(result, expectedKind: .trackedDomains)
-        }
-        .fileImporter(
-            isPresented: $showWorkflowsImporter,
-            allowedContentTypes: [UTType.json, UTType.commaSeparatedText],
-            allowsMultipleSelection: false
-        ) { result in
-            handleImportResult(result, expectedKind: .workflows)
-        }
-        .onAppear {
-            let currentResolverURL = storedResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            resolverOption = DNSResolverOption.option(for: currentResolverURL)
-            customResolverURL = resolverOption == .custom ? currentResolverURL : DNSResolverOption.defaultURLString
-            viewModel.refreshMonitoringState()
-            viewModel.refreshDataLifecycleSummary()
-            Task {
-                await viewModel.refreshUsageCredits()
-                await viewModel.refreshMonitoringAuthorizationStatus()
-                await cloudSyncService.refreshAvailability()
-            }
-        }
-        .onChange(of: resolverOption) { _, newValue in
-            guard let presetURL = newValue.urlString else {
-                storedResolverURL = customResolverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                viewModel.persistCurrentAppSettings(
-                    resolverURLString: storedResolverURL,
-                    appDensityRawValue: storedDensity
-                )
+            guard let pendingImportTarget else {
+                recordImportDebugStatus("fileImporter returned with no active target")
                 return
             }
-            storedResolverURL = presetURL
-            viewModel.persistCurrentAppSettings(
-                resolverURLString: storedResolverURL,
-                appDensityRawValue: storedDensity
-            )
+            recordImportDebugStatus("fileImporter returned for \(pendingImportTarget.expectedKind.rawValue)")
+            handleImportResult(result, expectedKind: pendingImportTarget.expectedKind)
+            self.pendingImportTarget = nil
+            self.activeImportTarget = nil
         }
-        .onChange(of: customResolverURL) { _, newValue in
-            guard resolverOption == .custom else { return }
-            storedResolverURL = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            viewModel.persistCurrentAppSettings(
-                resolverURLString: storedResolverURL,
-                appDensityRawValue: storedDensity
-            )
-        }
-        .onChange(of: storedDensity) { _, newValue in
-            viewModel.persistCurrentAppSettings(
-                resolverURLString: storedResolverURL,
-                appDensityRawValue: newValue
-            )
-        }
-    }
-
-    private var appVersion: String {
-        AppVersion.current
-    }
-
-    private var notificationAuthorizationLabel: String {
-        switch viewModel.monitoringNotificationStatus {
-        case .authorized, .provisional, .ephemeral:
-            return "Allowed"
-        case .denied:
-            return "Denied"
-        case .notDetermined:
-            return "Not Requested"
-        @unknown default:
-            return "Unknown"
+        .onAppear {
+            viewModel.refreshDataLifecycleSummary()
         }
     }
 
@@ -2985,32 +3143,55 @@ struct SettingsView: View {
         _ result: Result<[URL], Error>,
         expectedKind: DataPortabilityImportKind
     ) {
+        DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult expectedKind=\(expectedKind.rawValue)")
+        recordImportDebugStatus("handleImportResult started for \(expectedKind.rawValue)")
         do {
-            guard let url = try result.get().first else { return }
+            let urls = try result.get()
+            guard let url = urls.first else {
+                DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult noURLReturned")
+                recordImportDebugStatus("No URL returned from picker")
+                return
+            }
+            DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult selectedURL=\(url.absoluteString)")
+            recordImportDebugStatus("Selected \(url.lastPathComponent)")
             let shouldStopAccessing = url.startAccessingSecurityScopedResource()
+            DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult securityScopeGranted=\(shouldStopAccessing)")
+            recordImportDebugStatus("Security scope granted: \(shouldStopAccessing)")
             defer {
                 if shouldStopAccessing {
                     url.stopAccessingSecurityScopedResource()
+                    DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult securityScopeReleased")
                 }
             }
 
             let data = try Data(contentsOf: url)
+            DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult dataRead bytes=\(data.count) fileName=\(url.lastPathComponent)")
+            recordImportDebugStatus("Read \(data.count) bytes from \(url.lastPathComponent)")
             let preview = try viewModel.prepareDataImport(
                 data: data,
                 fileName: url.lastPathComponent,
                 mode: importMode
             )
+            DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult previewReady previewKind=\(preview.kind.rawValue) expectedKind=\(expectedKind.rawValue)")
+            recordImportDebugStatus("Preview ready: \(preview.kind.rawValue)")
 
             guard preview.kind == expectedKind else {
-                pendingImportError = preview.kind == .backup
+                let message = preview.kind == .backup
                     ? "That file is a full backup. Use Import Backup."
                     : "That file type does not match this import action."
+                DomainDebugLog.error("DataPortabilitySettingsView.handleImportResult kindMismatch message=\(message)")
+                recordImportDebugStatus("Kind mismatch: \(message)")
+                presentImportError(message)
                 return
             }
 
-            pendingImportPreview = preview
+            DomainDebugLog.debug("DataPortabilitySettingsView.handleImportResult presentingPreview kind=\(preview.kind.rawValue)")
+            recordImportDebugStatus("Presenting preview for \(preview.kind.rawValue)")
+            presentImportPreview(preview)
         } catch {
-            pendingImportError = error.localizedDescription
+            DomainDebugLog.error("DataPortabilitySettingsView.handleImportResult failed error=\(error.localizedDescription)")
+            recordImportDebugStatus("Import failed: \(error.localizedDescription)")
+            presentImportError(error.localizedDescription)
         }
     }
 
@@ -3028,6 +3209,118 @@ struct SettingsView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         return "\(formatter.string(from: Date()))_domaindig_\(suffix).\(fileExtension)"
+    }
+
+    private func presentImportPreview(_ preview: DataImportPreview) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            DomainDebugLog.debug("DataPortabilitySettingsView.presentImportPreview kind=\(preview.kind.rawValue) fileName=\(preview.fileName)")
+            recordImportDebugStatus("Preview presented for \(preview.fileName)")
+            pendingImportPreview = preview
+        }
+    }
+
+    private func presentImportError(_ message: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            DomainDebugLog.error("DataPortabilitySettingsView.presentImportError message=\(message)")
+            recordImportDebugStatus("Error presented: \(message)")
+            pendingImportError = message
+        }
+    }
+
+    private func recordImportDebugStatus(_ message: String) {
+        #if DEBUG
+        let status = "[Import Debug] \(message)"
+        importDebugStatus = status
+        print(status)
+        #endif
+    }
+}
+
+private struct DataManagementSettingsView: View {
+    @Bindable var viewModel: DomainViewModel
+
+    @State private var showClearHistoryConfirmation = false
+    @State private var showClearCacheConfirmation = false
+    @State private var showClearWorkflowsConfirmation = false
+    @State private var showClearTrackedDomainsConfirmation = false
+
+    var body: some View {
+        Form {
+            Section("Data") {
+                Button("Clear History", role: .destructive) {
+                    showClearHistoryConfirmation = true
+                }
+
+                Button("Clear Cache", role: .destructive) {
+                    showClearCacheConfirmation = true
+                }
+
+                Button("Clear Workflows", role: .destructive) {
+                    showClearWorkflowsConfirmation = true
+                }
+
+                Button("Clear Tracked Domains", role: .destructive) {
+                    showClearTrackedDomainsConfirmation = true
+                }
+            }
+        }
+        .navigationTitle("Data Management")
+        .alert("Clear history?", isPresented: $showClearHistoryConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes saved lookup snapshots and clears monitoring run history on this device.")
+        }
+        .alert("Clear cache?", isPresented: $showClearCacheConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearLookupCache()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This clears the in-memory lookup cache and cancels any cached in-flight work.")
+        }
+        .alert("Clear workflows?", isPresented: $showClearWorkflowsConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearWorkflows()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes saved workflows only. History, tracked domains, and saved reports stay intact.")
+        }
+        .alert("Clear tracked domains?", isPresented: $showClearTrackedDomainsConfirmation) {
+            Button("Clear", role: .destructive) {
+                viewModel.clearTrackedDomains()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the watchlist and clears monitoring run history. History and workflows stay intact.")
+        }
+    }
+}
+
+private struct AboutSettingsView: View {
+    @State private var cloudSyncService = CloudSyncService.shared
+
+    private var appVersion: String {
+        AppVersion.current
+    }
+
+    var body: some View {
+        Form {
+            Section("About") {
+                LabeledContent("Version", value: appVersion)
+                LabeledContent("Storage", value: cloudSyncService.isEnabled ? "Local-first + iCloud" : "Local-only")
+                LabeledContent("Backup Schema", value: "v\(DomainDigBackup.currentSchemaVersion)")
+            }
+        }
+        .navigationTitle("App Info")
+        .task {
+            await cloudSyncService.refreshAvailability()
+        }
     }
 }
 

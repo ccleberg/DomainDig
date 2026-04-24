@@ -17,7 +17,14 @@ struct MonitoringView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent("Status", value: viewModel.monitoringSettings.isEnabled ? "Scheduled" : "Manual only")
                     LabeledContent("Domains", value: "\(monitoredDomainsCount)")
-                    LabeledContent("Frequency", value: viewModel.monitoringSettings.frequency.title)
+                    LabeledContent("Base Interval", value: MonitoringBaseInterval.nearest(to: viewModel.monitoringSettings.baseInterval).title)
+                    LabeledContent("Adaptive", value: viewModel.monitoringSettings.adaptiveEnabled ? viewModel.monitoringSettings.sensitivity.title : "Off")
+                    LabeledContent(
+                        "Quiet Hours",
+                        value: viewModel.monitoringSettings.quietHours.map {
+                            "\(Self.hourLabel($0.startHour)) to \(Self.hourLabel($0.endHour))"
+                        } ?? "Off"
+                    )
                     LabeledContent("Alerts", value: viewModel.monitoringSettings.alertsEnabled ? viewModel.monitoringSettings.alertFilter.title : "Off")
 
                     if let monitoringStatusMessage = viewModel.monitoringStatusMessage,
@@ -42,7 +49,8 @@ struct MonitoringView: View {
                         title: "No Monitoring Runs Yet",
                         message: "Monitoring history appears here after manual or background runs finish.",
                         suggestion: "Enable monitoring in Settings or run a manual monitoring sweep.",
-                        systemImage: "waveform.path.ecg"
+                        systemImage: "waveform.path.ecg",
+                        showsCardBackground: false
                     )
                 }
                 .listRowBackground(Color(.systemGray6).opacity(0.5))
@@ -101,6 +109,13 @@ struct MonitoringView: View {
             .padding(.vertical, 4)
             .background(tint.opacity(0.16))
             .clipShape(Capsule())
+    }
+
+    private static func hourLabel(_ hour: Int) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h a"
+        let components = DateComponents(calendar: .current, hour: hour)
+        return components.date.map(formatter.string(from:)) ?? "\(hour):00"
     }
 }
 

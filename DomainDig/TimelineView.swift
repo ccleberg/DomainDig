@@ -12,6 +12,10 @@ struct TimelineView: View {
         viewModel.timelineSections(for: domain)
     }
 
+    private var compareButtonDisabled: Bool {
+        viewModel.selectedSnapshots.count != 2 && viewModel.historyEntries(for: domain).count < 2
+    }
+
     var body: some View {
         List {
             ForEach(timelineSections) { section in
@@ -61,10 +65,16 @@ struct TimelineView: View {
                 }
 
                 Button("Compare") {
-                    presentedDiff = viewModel.generateDiffForSelectedSnapshots()
+                    if viewModel.selectedSnapshots.count == 2 {
+                        presentedDiff = viewModel.generateDiffForSelectedSnapshots()
+                    } else {
+                        let entries = viewModel.historyEntries(for: domain)
+                        guard entries.count >= 2 else { return }
+                        presentedDiff = viewModel.generateDiff(from: entries[1], to: entries[0])
+                    }
                     focusedSectionID = viewModel.currentDiffTargetSectionID
                 }
-                .disabled(viewModel.selectedSnapshots.count != 2)
+                .disabled(compareButtonDisabled)
 
                 Menu("Export") {
                     Button("Export TXT") {
@@ -119,46 +129,24 @@ private struct TimelineRow: View {
 
             HStack(spacing: 8) {
                 AppStatusBadgeView(model: AppStatusFactory.availability(summary.availability))
-                if let primaryIP = summary.primaryIP {
-                    AppStatusBadgeView(
-                        model: .init(
-                            title: primaryIP,
-                            systemImage: "network",
-                            foregroundColor: .blue,
-                            backgroundColor: .blue.opacity(0.16)
-                        )
-                    )
-                }
-                if let tlsStatus = summary.tlsStatus {
-                    AppStatusBadgeView(
-                        model: .init(
-                            title: tlsStatus.capitalized,
-                            systemImage: "lock.shield",
-                            foregroundColor: .green,
-                            backgroundColor: .green.opacity(0.16)
-                        )
-                    )
-                }
                 if let riskScore = summary.riskScore {
-                    AppStatusBadgeView(
-                        model: .init(
-                            title: "Risk \(riskScore)",
-                            systemImage: "exclamationmark.shield",
-                            foregroundColor: riskScore >= 70 ? .red : .orange,
-                            backgroundColor: (riskScore >= 70 ? Color.red : .orange).opacity(0.16)
-                        )
-                    )
+                    Text("Risk \(riskScore)")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
             }
+            .font(appDensity.font(.caption2))
+            .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                if let snapshotIndex = summary.snapshotIndex {
-                    Text("#\(snapshotIndex)")
+                if let primaryIP = summary.primaryIP {
+                    Text(primaryIP)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                Text(summary.timestamp.formatted(.relative(presentation: .named)))
-                if summary.changeCount > 0 {
-                    Text("\(summary.changeCount) changes")
-                }
+                Spacer(minLength: 8)
+                Text(summary.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    .lineLimit(1)
             }
             .font(appDensity.font(.caption2))
             .foregroundStyle(.secondary)
