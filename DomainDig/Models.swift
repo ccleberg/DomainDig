@@ -541,6 +541,83 @@ enum HistorySortOption: String, CaseIterable, Identifiable {
     }
 }
 
+enum TimelineGroupingOption: String, CaseIterable, Identifiable {
+    case none
+    case relativeDay
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none:
+            return "Ungrouped"
+        case .relativeDay:
+            return "Today / Yesterday / Older"
+        }
+    }
+}
+
+enum HistoryAutoPruneOption: String, CaseIterable, Codable, Identifiable {
+    case keep50
+    case keep100
+    case unlimited
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .keep50:
+            return "Keep Last 50"
+        case .keep100:
+            return "Keep Last 100"
+        case .unlimited:
+            return "Unlimited"
+        }
+    }
+
+    var keepCount: Int? {
+        switch self {
+        case .keep50:
+            return 50
+        case .keep100:
+            return 100
+        case .unlimited:
+            return nil
+        }
+    }
+}
+
+struct SnapshotSummary: Identifiable, Codable, Equatable {
+    let id: UUID
+    let domain: String
+    let timestamp: Date
+    let trackedDomainID: UUID?
+    let snapshotIndex: Int?
+    let previousSnapshotID: UUID?
+    let changeCount: Int
+    let severitySummary: ChangeSeverity?
+    let changeSummaryMessage: String?
+    let availability: DomainAvailabilityStatus?
+    let primaryIP: String?
+    let tlsStatus: String?
+    let riskScore: Int?
+    let historyEntryID: UUID
+
+    var hasChanges: Bool {
+        changeCount > 0
+    }
+}
+
+struct FullSnapshot: Codable {
+    let historyEntry: HistoryEntry
+}
+
+struct TimelineSection: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let entries: [SnapshotSummary]
+}
+
 enum WatchlistFilterOption: String, CaseIterable, Identifiable {
     case all
     case pinnedOnly
@@ -1304,6 +1381,10 @@ struct HistoryEntry: Identifiable, Codable {
     var emailSecuritySummary: String?
     var httpGradeSummary: String?
     var changeSummary: DomainChangeSummary?
+    var snapshotIndex: Int?
+    var previousSnapshotID: UUID?
+    var changeCount: Int
+    var severitySummary: ChangeSeverity?
     var sslError: String?
     var httpHeadersError: String?
     var reachabilityError: String?
@@ -1339,7 +1420,8 @@ struct HistoryEntry: Identifiable, Codable {
          validationIssues: [String] = [], resolverDisplayName: String, resolverURLString: String,
          totalLookupDurationMs: Int? = nil, primaryIP: String? = nil, finalRedirectURL: String? = nil,
          tlsStatusSummary: String? = nil, emailSecuritySummary: String? = nil, httpGradeSummary: String? = nil,
-         changeSummary: DomainChangeSummary? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
+         changeSummary: DomainChangeSummary? = nil, snapshotIndex: Int? = nil, previousSnapshotID: UUID? = nil,
+         changeCount: Int = 0, severitySummary: ChangeSeverity? = nil, sslError: String? = nil, httpHeadersError: String? = nil,
          reachabilityError: String? = nil, ipGeolocationError: String? = nil,
          emailSecurityError: String? = nil, ownershipError: String? = nil, ownershipHistoryError: String? = nil,
          ptrError: String? = nil, redirectChainError: String? = nil, subdomainsError: String? = nil,
@@ -1389,6 +1471,10 @@ struct HistoryEntry: Identifiable, Codable {
         self.emailSecuritySummary = emailSecuritySummary
         self.httpGradeSummary = httpGradeSummary
         self.changeSummary = changeSummary
+        self.snapshotIndex = snapshotIndex
+        self.previousSnapshotID = previousSnapshotID
+        self.changeCount = changeCount
+        self.severitySummary = severitySummary
         self.sslError = sslError
         self.httpHeadersError = httpHeadersError
         self.reachabilityError = reachabilityError
@@ -1452,6 +1538,13 @@ struct HistoryEntry: Identifiable, Codable {
         emailSecuritySummary = try container.decodeIfPresent(String.self, forKey: .emailSecuritySummary)
         httpGradeSummary = try container.decodeIfPresent(String.self, forKey: .httpGradeSummary)
         changeSummary = try container.decodeIfPresent(DomainChangeSummary.self, forKey: .changeSummary)
+        snapshotIndex = try container.decodeIfPresent(Int.self, forKey: .snapshotIndex)
+        previousSnapshotID = try container.decodeIfPresent(UUID.self, forKey: .previousSnapshotID)
+        changeCount = try container.decodeIfPresent(Int.self, forKey: .changeCount)
+            ?? changeSummary?.changedSections.count
+            ?? 0
+        severitySummary = try container.decodeIfPresent(ChangeSeverity.self, forKey: .severitySummary)
+            ?? changeSummary?.severity
         sslError = try container.decodeIfPresent(String.self, forKey: .sslError)
         httpHeadersError = try container.decodeIfPresent(String.self, forKey: .httpHeadersError)
         reachabilityError = try container.decodeIfPresent(String.self, forKey: .reachabilityError)
@@ -1477,6 +1570,25 @@ struct HistoryEntry: Identifiable, Codable {
             issues.append("Missing collection timestamp in stored snapshot")
         }
         return issues
+    }
+
+    var snapshotSummary: SnapshotSummary {
+        SnapshotSummary(
+            id: id,
+            domain: domain,
+            timestamp: timestamp,
+            trackedDomainID: trackedDomainID,
+            snapshotIndex: snapshotIndex,
+            previousSnapshotID: previousSnapshotID,
+            changeCount: changeCount,
+            severitySummary: severitySummary ?? changeSummary?.severity,
+            changeSummaryMessage: changeSummary?.message,
+            availability: availabilityResult?.status,
+            primaryIP: primaryIP,
+            tlsStatus: tlsStatusSummary,
+            riskScore: changeSummary?.riskAssessment?.score,
+            historyEntryID: id
+        )
     }
 }
 

@@ -62,6 +62,10 @@ struct DomainReportMetadata: Codable {
     let isPartialSnapshot: Bool
     let errorDetails: [LookupSectionKind: InspectionFailure]
     let statusMessage: String?
+    let snapshotIndex: Int?
+    let previousSnapshotID: UUID?
+    let changeCount: Int
+    let severitySummary: ChangeSeverity?
 }
 
 struct DNSResultSummary: Codable {
@@ -123,26 +127,103 @@ struct DomainReportBuilder {
     func build(
         from snapshot: LookupSnapshot,
         previousSnapshot: LookupSnapshot? = nil,
-        workflowContext: DomainWorkflowContext? = nil
+        workflowContext: DomainWorkflowContext? = nil,
+        deriveChangeSummary: Bool = true
     ) -> DomainReport {
+        let buildStartedAt = DomainDebugLog.signpostStart("DomainReportBuilder.build", domain: snapshot.domain)
         let primaryIP = primaryIPAddress(from: snapshot)
         let analysis = DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
         let changeSummary: DomainChangeSummary?
         if let existingChangeSummary = snapshot.changeSummary, existingChangeSummary.riskAssessment != nil {
             changeSummary = existingChangeSummary
-        } else {
-            changeSummary = previousSnapshot.map {
-                DomainDiffService.summary(
-                    from: $0,
-                    to: snapshot,
-                    generatedAt: snapshot.timestamp,
-                    riskAssessment: analysis.riskAssessment,
-                    insights: analysis.insights
-                )
+        } else if deriveChangeSummary, let previousSnapshot {
+            let previousReport = build(
+                from: previousSnapshot,
+                workflowContext: workflowContext,
+                deriveChangeSummary: false
+            )
+            let currentReport = buildBaseReport(
+                from: snapshot,
+                previousSnapshot: previousSnapshot,
+                workflowContext: workflowContext,
+                analysis: analysis,
+                primaryIP: primaryIP,
+                changeSummary: nil as DomainChangeSummary?
+            )
+            let diff = DiffService.compare(from: previousReport, to: currentReport)
+            let changedItems = diff.sections.flatMap { $0.items }.filter { $0.hasChanges }
+            let highlights = diff.changedSectionTitles
+            let severity = changedItems.map { $0.severity }.max() ?? .low
+            let message = DiffService.summaryMessage(from: highlights, changeCount: changedItems.count)
+            let observedFacts = changedItems.prefix(4).map { item in
+                "\(item.label): \(item.oldValue ?? "none") -> \(item.newValue ?? "none")"
             }
+            let previousRiskScore = previousReport.riskAssessment.score
+            let riskScoreDelta = analysis.riskAssessment.score - previousRiskScore
+            let impactClassification = DomainInsightEngine.impactClassification(
+                severity: severity,
+                riskDelta: riskScoreDelta,
+                changedSections: highlights
+            )
+
+            changeSummary = DomainChangeSummary(
+                hasChanges: !changedItems.isEmpty,
+                changedSections: highlights,
+                message: message,
+                severity: severity,
+                impactClassification: impactClassification,
+                generatedAt: snapshot.timestamp,
+                observedFacts: observedFacts,
+                inferredConclusions: highlights.isEmpty ? [] : [message],
+                contextNote: diff.contextNote,
+                riskAssessment: analysis.riskAssessment,
+                insights: analysis.insights,
+                riskScoreDelta: riskScoreDelta
+            )
+        } else {
+            changeSummary = nil
         }
 
-        return DomainReport(
+        let report = buildBaseReport(
+            from: snapshot,
+            previousSnapshot: previousSnapshot,
+            workflowContext: workflowContext,
+            analysis: analysis,
+            primaryIP: primaryIP,
+            changeSummary: changeSummary
+        )
+        DomainDebugLog.signpostEnd(
+            "DomainReportBuilder.build",
+            start: buildStartedAt,
+            domain: snapshot.domain,
+            extra: "risk=\(report.riskAssessment.score) insights=\(report.insights.count)"
+        )
+        return report
+    }
+
+    func build(
+        from entry: HistoryEntry,
+        previousSnapshot: LookupSnapshot? = nil,
+        workflowContext: DomainWorkflowContext? = nil,
+        deriveChangeSummary: Bool = true
+    ) -> DomainReport {
+        build(
+            from: entry.snapshot,
+            previousSnapshot: previousSnapshot,
+            workflowContext: workflowContext,
+            deriveChangeSummary: deriveChangeSummary
+        )
+    }
+
+    private func buildBaseReport(
+        from snapshot: LookupSnapshot,
+        previousSnapshot: LookupSnapshot?,
+        workflowContext: DomainWorkflowContext?,
+        analysis: DomainAnalysisBundle,
+        primaryIP: String?,
+        changeSummary: DomainChangeSummary?
+    ) -> DomainReport {
+        DomainReport(
             domain: snapshot.domain,
             timestamp: snapshot.timestamp,
             provenance: DomainReportProvenance(
@@ -230,7 +311,7 @@ struct DomainReportBuilder {
             changeSummary: changeSummary,
             workflowContext: workflowContext,
             metadata: DomainReportMetadata(
-                schemaVersion: "3.2.0",
+                schemaVersion: "3.7.0",
                 resolverDisplayName: snapshot.resolverDisplayName,
                 resolverURLString: snapshot.resolverURLString,
                 appVersion: snapshot.appVersion,
@@ -239,17 +320,13 @@ struct DomainReportBuilder {
                 validationIssues: snapshot.validationIssues,
                 isPartialSnapshot: snapshot.isPartialSnapshot,
                 errorDetails: snapshot.errorDetails,
-                statusMessage: snapshot.statusMessage
+                statusMessage: snapshot.statusMessage,
+                snapshotIndex: snapshot.snapshotIndex,
+                previousSnapshotID: snapshot.previousSnapshotID ?? previousSnapshot?.historyEntryID,
+                changeCount: snapshot.changeCount == 0 ? (changeSummary?.changedSections.count ?? 0) : snapshot.changeCount,
+                severitySummary: snapshot.severitySummary ?? changeSummary?.severity
             )
         )
-    }
-
-    func build(
-        from entry: HistoryEntry,
-        previousSnapshot: LookupSnapshot? = nil,
-        workflowContext: DomainWorkflowContext? = nil
-    ) -> DomainReport {
-        build(from: entry.snapshot, previousSnapshot: previousSnapshot, workflowContext: workflowContext)
     }
 
     private func primaryIPAddress(from snapshot: LookupSnapshot) -> String? {

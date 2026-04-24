@@ -208,6 +208,10 @@ final class DomainViewModel {
     private var lastBatchStartedAt: Date?
     private var activeWorkflowRunID: UUID?
     private var activeWorkflowRunName: String?
+    private var historyPersistenceSuspended = false
+    private var trackedDomainsPersistenceSuspended = false
+    private var historyPersistenceDirty = false
+    private var trackedDomainsPersistenceDirty = false
     private let reportBuilder = DomainReportBuilder()
     private let inspectionService = DomainInspectionService()
     private(set) var currentResultSource: LookupResultSource = .live
@@ -237,6 +241,8 @@ final class DomainViewModel {
     var historyDateFilter: HistoryDateFilter = .all
     var historyChangeFilter: ChangeFilterOption = .all
     var historySortOption: HistorySortOption = .newest
+    var timelineGrouping: TimelineGroupingOption = .relativeDay
+    var timelineDomainFilter = ""
     var watchlistSearchText = ""
     var watchlistFilter: WatchlistFilterOption = .all
     var watchlistSortOption: WatchlistSortOption = .pinned
@@ -249,6 +255,12 @@ final class DomainViewModel {
     var portabilityStatusMessage: String?
     var upgradePrompt: UpgradePromptContext?
     var isPaywallPresented = false
+    var selectedSnapshotIDs = Set<UUID>()
+    var activeDomainDiff: DomainDiff?
+    var activeDiffChangeIndex = 0
+
+    private static let historyAutoPruneKey = "historyAutoPrune"
+    var historyAutoPruneOption: HistoryAutoPruneOption = DomainViewModel.loadHistoryAutoPruneOption()
 
     var trimmedDomain: String {
         domain
@@ -365,6 +377,15 @@ final class DomainViewModel {
         return sortedTrackedDomains(from: filtered, using: watchlistSortOption)
     }
 
+    var timelineDomains: [String] {
+        let query = timelineDomainFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let domains = history.map(\.domain)
+        let filtered = query.isEmpty
+            ? domains
+            : domains.filter { $0.localizedCaseInsensitiveContains(query) }
+        return Array(Set(filtered)).sorted()
+    }
+
     var batchProgressLabel: String {
         guard batchTotalCount > 0 else { return "No active batch" }
         if !batchLookupRunning, batchCompletedCount >= batchTotalCount {
@@ -441,6 +462,10 @@ final class DomainViewModel {
             isPartialSnapshot: currentHistoryEntry?.isPartialSnapshot ?? false,
             validationIssues: currentHistoryEntry?.validationIssues ?? [],
             totalLookupDurationMs: lastLookupDurationMs,
+            snapshotIndex: currentHistoryEntry?.snapshotIndex,
+            previousSnapshotID: currentHistoryEntry?.previousSnapshotID,
+            changeCount: currentHistoryEntry?.changeCount ?? currentChangeSummary?.changedSections.count ?? 0,
+            severitySummary: currentHistoryEntry?.severitySummary ?? currentChangeSummary?.severity,
             dnsSections: dnsSections,
             dnsError: dnsError,
             availabilityResult: availabilityResult,
@@ -1372,6 +1397,22 @@ final class DomainViewModel {
         )
     }
 
+    func exportTimelineText(domain: String, includeDiffSummary: Bool) -> String {
+        DomainReportExporter.timelineText(
+            for: timelineReports(for: domain),
+            domain: domain,
+            includeDiffSummary: includeDiffSummary
+        )
+    }
+
+    func exportTimelineJSONData(domain: String, includeDiffSummary: Bool) -> Data? {
+        try? DomainReportExporter.timelineData(
+            for: timelineReports(for: domain),
+            domain: domain,
+            includeDiffSummary: includeDiffSummary
+        )
+    }
+
     func exportFullBackupData() -> Data? {
         try? DomainDataPortabilityService.backupData()
     }
@@ -1461,20 +1502,25 @@ final class DomainViewModel {
     }
 
     private func performLookup(domain: String, lookupID: UUID) async -> HistoryEntry? {
+        let lookupStartedAt = DomainDebugLog.signpostStart("DomainViewModel.performLookup", domain: domain)
         let previous = previousSnapshot(
             for: domain,
             trackedDomainID: currentTrackedDomain?.id,
             replacingLatest: false
         )
         let inspectedSnapshot = await inspectionService.inspectSnapshot(domain: domain, previousSnapshot: previous)
+        DomainDebugLog.debug("DomainViewModel.performLookup inspectionReturned domain=\(domain)")
         guard !Task.isCancelled, isCurrentLookup(lookupID) else { return nil }
 
         let snapshot = Self.resolvedSnapshotAfterFallback(inspectedSnapshot, previousSnapshot: previous)
+        let applyStartedAt = DomainDebugLog.signpostStart("DomainViewModel.applySnapshot", domain: domain)
         applySnapshot(snapshot)
+        DomainDebugLog.signpostEnd("DomainViewModel.applySnapshot", start: applyStartedAt, domain: domain)
         lastLookupDurationMs = snapshot.totalLookupDurationMs
         refreshingTrackedDomainID = nil
 
         if DataAccessService.hasAccess(to: .domainPricing), domainPricing == nil {
+            DomainDebugLog.debug("DomainViewModel.performLookup loadingPricing domain=\(domain)")
             await refreshDomainPricing(for: snapshot.domain, persistAfterFetch: false)
         }
 
@@ -1483,8 +1529,11 @@ final class DomainViewModel {
             return history.first(where: { $0.id == snapshot.historyEntryID })
         }
 
-        let entry = saveHistoryEntry(replaceLatest: false)
+        let saveStartedAt = DomainDebugLog.signpostStart("DomainViewModel.saveHistoryEntry", domain: domain)
+        let entry = saveHistoryEntry(replaceLatest: false, reuseCurrentAnalysis: true)
+        DomainDebugLog.signpostEnd("DomainViewModel.saveHistoryEntry", start: saveStartedAt, domain: domain)
         await refreshUsageCredits()
+        DomainDebugLog.signpostEnd("DomainViewModel.performLookup", start: lookupStartedAt, domain: domain)
         return entry
     }
 
@@ -1496,6 +1545,7 @@ final class DomainViewModel {
         currentStatusMessage = snapshot.statusMessage
         currentDiffSections = []
         ownershipDiff = []
+        let reportStartedAt = DomainDebugLog.signpostStart("DomainViewModel.reportBuilder.build", domain: snapshot.domain)
         currentReport = reportBuilder.build(
             from: snapshot,
             previousSnapshot: previousSnapshot(
@@ -1504,6 +1554,7 @@ final class DomainViewModel {
                 replacingLatest: false
             )
         )
+        DomainDebugLog.signpostEnd("DomainViewModel.reportBuilder.build", start: reportStartedAt, domain: snapshot.domain)
         currentChangeSummary = currentReport?.changeSummary ?? snapshot.changeSummary
 
         dnsSections = snapshot.dnsSections
@@ -1596,6 +1647,10 @@ final class DomainViewModel {
             isPartialSnapshot: previousSnapshot.isPartialSnapshot,
             validationIssues: previousSnapshot.validationIssues,
             totalLookupDurationMs: previousSnapshot.totalLookupDurationMs,
+            snapshotIndex: previousSnapshot.snapshotIndex,
+            previousSnapshotID: previousSnapshot.previousSnapshotID,
+            changeCount: previousSnapshot.changeCount,
+            severitySummary: previousSnapshot.severitySummary,
             dnsSections: previousSnapshot.dnsSections,
             dnsError: previousSnapshot.dnsError,
             availabilityResult: previousSnapshot.availabilityResult,
@@ -1956,32 +2011,61 @@ final class DomainViewModel {
     }
 
     @discardableResult
-    private func saveHistoryEntry(replaceLatest: Bool) -> HistoryEntry? {
+    private func saveHistoryEntry(replaceLatest: Bool, reuseCurrentAnalysis: Bool = false) -> HistoryEntry? {
         guard !searchedDomain.isEmpty else { return nil }
-        return saveHistoryEntry(from: currentSnapshot, replaceLatest: replaceLatest, updateCurrentState: true)
+        return saveHistoryEntry(
+            from: currentSnapshot,
+            replaceLatest: replaceLatest,
+            updateCurrentState: true,
+            reuseCurrentAnalysis: reuseCurrentAnalysis
+        )
     }
 
     @discardableResult
-    private func saveHistoryEntry(from snapshot: LookupSnapshot, replaceLatest: Bool, updateCurrentState: Bool) -> HistoryEntry? {
+    private func saveHistoryEntry(
+        from snapshot: LookupSnapshot,
+        replaceLatest: Bool,
+        updateCurrentState: Bool,
+        reuseCurrentAnalysis: Bool = false
+    ) -> HistoryEntry? {
         let trackedDomainID = snapshot.trackedDomainID ?? trackedDomain(for: snapshot.domain)?.id
         let previousSnapshot = previousSnapshot(for: snapshot.domain, trackedDomainID: trackedDomainID, replacingLatest: replaceLatest)
-        let analysis = DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
-        let changeSummary = previousSnapshot.map {
-            DomainDiffService.summary(
-                from: $0,
-                to: snapshot,
-                generatedAt: snapshot.timestamp,
-                riskAssessment: analysis.riskAssessment,
-                insights: analysis.insights
-            )
-        }
-        let diffSections = previousSnapshot.map { DomainDiffService.diff(from: $0, to: snapshot) } ?? []
+        let analysis = reuseCurrentAnalysis ? nil : DomainInsightEngine.analyze(snapshot: snapshot, previousSnapshot: previousSnapshot)
+        let changeSummary = reuseCurrentAnalysis
+            ? currentChangeSummary ?? snapshot.changeSummary
+            : previousSnapshot.map {
+                DiffService.summary(
+                    from: $0,
+                    to: snapshot,
+                    generatedAt: snapshot.timestamp,
+                    riskAssessment: analysis?.riskAssessment,
+                    insights: analysis?.insights
+                )
+            }
+        let domainDiff = reuseCurrentAnalysis
+            ? previousSnapshot.map {
+                DomainDiff(
+                    domain: snapshot.domain,
+                    fromTimestamp: $0.timestamp,
+                    toTimestamp: snapshot.timestamp,
+                    sections: currentDiffSections,
+                    changedSectionIDs: currentDiffSections.filter(\.hasChanges).map(\.id),
+                    changedSectionTitles: currentDiffSections.filter(\.hasChanges).map(\.title),
+                    contextNote: currentChangeSummary?.contextNote
+                )
+            }
+            : previousSnapshot.map { DiffService.compare(from: $0, to: snapshot) }
+        let diffSections = domainDiff?.sections ?? currentDiffSections
+        let previousSnapshotID = previousSnapshot?.historyEntryID
+        let nextSnapshotIndex = nextSnapshotIndex(for: snapshot.domain, trackedDomainID: trackedDomainID)
 
         if updateCurrentState {
             currentChangeSummary = changeSummary
             currentDiffSections = diffSections
             ownershipDiff = diffSections.first(where: { $0.title == "Ownership" })?.items.filter(\.hasChanges) ?? []
-            currentReport = reportBuilder.build(from: snapshot, previousSnapshot: previousSnapshot)
+            if !reuseCurrentAnalysis {
+                currentReport = reportBuilder.build(from: snapshot, previousSnapshot: previousSnapshot)
+            }
         }
 
         let entry = HistoryEntry(
@@ -2029,6 +2113,10 @@ final class DomainViewModel {
             emailSecuritySummary: Self.emailSummary(from: snapshot),
             httpGradeSummary: snapshot.httpSecurityGrade ?? snapshot.httpHeadersError,
             changeSummary: changeSummary,
+            snapshotIndex: nextSnapshotIndex,
+            previousSnapshotID: previousSnapshotID,
+            changeCount: domainDiff?.changeCount ?? changeSummary?.changedSections.count ?? 0,
+            severitySummary: changeSummary?.severity,
             sslError: snapshot.sslError,
             httpHeadersError: snapshot.httpHeadersError,
             reachabilityError: snapshot.reachabilityError,
@@ -2053,9 +2141,7 @@ final class DomainViewModel {
             history[0] = entry
         } else {
             history.insert(entry, at: 0)
-            if history.count > Self.maxHistory {
-                history = Array(history.prefix(Self.maxHistory))
-            }
+            trimHistoryToLimit()
         }
 
         updateTrackedDomainSnapshotMetadata(
@@ -2074,8 +2160,21 @@ final class DomainViewModel {
     }
 
     private func persistHistory() {
+        if historyPersistenceSuspended {
+            historyPersistenceDirty = true
+            return
+        }
+        let persistStartedAt = DomainDebugLog.signpostStart("DomainViewModel.persistHistory")
         DomainDataPortabilityService.saveHistoryEntries(history)
         refreshDataLifecycleSummary()
+        DomainDebugLog.signpostEnd("DomainViewModel.persistHistory", start: persistStartedAt, extra: "count=\(history.count)")
+    }
+
+    func setHistoryAutoPruneOption(_ option: HistoryAutoPruneOption) {
+        historyAutoPruneOption = option
+        UserDefaults.standard.set(option.rawValue, forKey: Self.historyAutoPruneKey)
+        trimHistoryToLimit()
+        persistHistory()
     }
 
     func updateHistoryNote(_ note: String, for entry: HistoryEntry) {
@@ -2085,9 +2184,54 @@ final class DomainViewModel {
     }
 
     private func persistTrackedDomains() {
+        if trackedDomainsPersistenceSuspended {
+            trackedDomainsPersistenceDirty = true
+            return
+        }
         DomainDataPortabilityService.saveTrackedDomains(trackedDomains)
         CloudSyncService.shared.scheduleSyncIfNeeded()
         refreshDataLifecycleSummary()
+    }
+
+    private func beginBulkPersistenceDeferral() {
+        historyPersistenceSuspended = true
+        trackedDomainsPersistenceSuspended = true
+        historyPersistenceDirty = false
+        trackedDomainsPersistenceDirty = false
+    }
+
+    private func endBulkPersistenceDeferral() {
+        historyPersistenceSuspended = false
+        trackedDomainsPersistenceSuspended = false
+
+        if trackedDomainsPersistenceDirty {
+            trackedDomainsPersistenceDirty = false
+            DomainDataPortabilityService.saveTrackedDomains(trackedDomains)
+            CloudSyncService.shared.scheduleSyncIfNeeded()
+        }
+
+        if historyPersistenceDirty {
+            historyPersistenceDirty = false
+            DomainDataPortabilityService.saveHistoryEntries(history)
+        }
+
+        refreshDataLifecycleSummary()
+    }
+
+    private func trimHistoryToLimit() {
+        let hardLimit = historyAutoPruneOption.keepCount ?? Self.maxHistory
+        history = Array(history.prefix(min(hardLimit, Self.maxHistory)))
+    }
+
+    private func nextSnapshotIndex(for domain: String, trackedDomainID: UUID?) -> Int {
+        let siblings = history.filter { entry in
+            if let trackedDomainID {
+                return entry.trackedDomainID == trackedDomainID
+            }
+            return entry.domain.caseInsensitiveCompare(domain) == .orderedSame
+        }
+        let existingMax = siblings.compactMap(\.snapshotIndex).max() ?? siblings.count
+        return existingMax + 1
     }
 
     private func persistMonitoringSettings(localActivationConfirmed: Bool = false) {
@@ -2328,6 +2472,7 @@ final class DomainViewModel {
     private func runBatchLookup(domains: [String], source: BatchLookupSource) async {
         let concurrencyLimit = min(source == .watchlistRefresh ? 4 : 3, max(domains.count, 1))
         var nextIndex = 0
+        beginBulkPersistenceDeferral()
 
         await withTaskGroup(of: (String, BatchLookupPayload?).self) { group in
             for _ in 0..<concurrencyLimit {
@@ -2348,6 +2493,7 @@ final class DomainViewModel {
             }
         }
 
+        endBulkPersistenceDeferral()
         finishBatchLookup(source: source)
     }
 
@@ -2396,7 +2542,7 @@ final class DomainViewModel {
             }
         }
         let certificateWarningLevel = DomainDiffService.certificateWarningLevel(for: payload.snapshot)
-        let riskAssessment = DomainInsightEngine.analyze(snapshot: payload.snapshot).riskAssessment
+        let riskAssessment = entry?.changeSummary?.riskAssessment ?? DomainInsightEngine.analyze(snapshot: payload.snapshot).riskAssessment
         let quickStatus: String
         if entry?.changeSummary?.hasChanges == true {
             quickStatus = entry?.changeSummary?.impactClassification == .critical ? "Critical" : (entry?.changeSummary?.severity == .high ? "High" : "Changed")
@@ -2646,20 +2792,127 @@ final class DomainViewModel {
     }
 
     func comparisonSnapshot(for entry: HistoryEntry) -> LookupSnapshot? {
-        let siblings = history.filter { candidate in
-            if let trackedDomainID = entry.trackedDomainID {
-                return candidate.trackedDomainID == trackedDomainID && candidate.id != entry.id
-            }
-            return candidate.domain.caseInsensitiveCompare(entry.domain) == .orderedSame && candidate.id != entry.id
-        }
-        .sorted { $0.timestamp > $1.timestamp }
+        previousHistoryEntry(for: entry)?.snapshot
+    }
 
-        return siblings.first?.snapshot
+    func timelineEntries(for domain: String) -> [SnapshotSummary] {
+        historyEntries(for: domain).map(\.snapshotSummary)
+    }
+
+    func timelineSections(for domain: String, grouping: TimelineGroupingOption? = nil) -> [TimelineSection] {
+        let entries = timelineEntries(for: domain)
+        let grouping = grouping ?? timelineGrouping
+
+        guard grouping == .relativeDay else {
+            return entries.isEmpty ? [] : [TimelineSection(id: "all", title: "All Snapshots", entries: entries)]
+        }
+
+        let calendar = Calendar.current
+        let today = Date()
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        let grouped = Dictionary(grouping: entries) { entry -> String in
+            if calendar.isDate(entry.timestamp, inSameDayAs: today) {
+                return "Today"
+            }
+            if calendar.isDate(entry.timestamp, inSameDayAs: yesterday) {
+                return "Yesterday"
+            }
+            return "Older"
+        }
+
+        return ["Today", "Yesterday", "Older"].compactMap { title in
+            guard let items = grouped[title], !items.isEmpty else { return nil }
+            return TimelineSection(id: title.lowercased(), title: title, entries: items)
+        }
+    }
+
+    func historyEntries(for domain: String) -> [HistoryEntry] {
+        history
+            .filter { $0.domain.caseInsensitiveCompare(domain) == .orderedSame }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    func historyEntry(withID id: UUID) -> HistoryEntry? {
+        history.first(where: { $0.id == id })
+    }
+
+    func previousHistoryEntry(for entry: HistoryEntry) -> HistoryEntry? {
+        let siblings = historyEntries(for: entry.domain)
+        guard let index = siblings.firstIndex(where: { $0.id == entry.id }) else { return nil }
+        let nextIndex = index + 1
+        guard siblings.indices.contains(nextIndex) else { return nil }
+        return siblings[nextIndex]
+    }
+
+    func toggleSnapshotSelection(_ entry: HistoryEntry) {
+        if selectedSnapshotIDs.contains(entry.id) {
+            selectedSnapshotIDs.remove(entry.id)
+        } else if selectedSnapshotIDs.count < 2 {
+            selectedSnapshotIDs.insert(entry.id)
+        } else if let oldest = selectedSnapshotIDs.first {
+            selectedSnapshotIDs.remove(oldest)
+            selectedSnapshotIDs.insert(entry.id)
+        }
+    }
+
+    func clearSnapshotSelection() {
+        selectedSnapshotIDs.removeAll()
+    }
+
+    var selectedSnapshots: [HistoryEntry] {
+        selectedSnapshotIDs.compactMap(historyEntry(withID:)).sorted { $0.timestamp < $1.timestamp }
+    }
+
+    @discardableResult
+    func generateDiffForSelectedSnapshots(focusSectionID: String? = nil) -> DomainDiff? {
+        guard selectedSnapshots.count == 2 else {
+            activeDomainDiff = nil
+            activeDiffChangeIndex = 0
+            return nil
+        }
+
+        let diff = DiffService.compare(from: selectedSnapshots[0].snapshot, to: selectedSnapshots[1].snapshot)
+        activeDomainDiff = diff
+        if let focusSectionID, let index = diff.changedSectionIDs.firstIndex(of: focusSectionID) {
+            activeDiffChangeIndex = index
+        } else {
+            activeDiffChangeIndex = 0
+        }
+        return diff
+    }
+
+    func generateDiff(from olderEntry: HistoryEntry, to newerEntry: HistoryEntry, focusSectionID: String? = nil) -> DomainDiff {
+        selectedSnapshotIDs = [olderEntry.id, newerEntry.id]
+        let diff = DiffService.compare(from: olderEntry.snapshot, to: newerEntry.snapshot)
+        activeDomainDiff = diff
+        if let focusSectionID, let index = diff.changedSectionIDs.firstIndex(of: focusSectionID) {
+            activeDiffChangeIndex = index
+        } else {
+            activeDiffChangeIndex = 0
+        }
+        return diff
     }
 
     func historyEntry(for batchResult: BatchLookupResult) -> HistoryEntry? {
         guard let historyEntryID = batchResult.historyEntryID else { return nil }
         return history.first(where: { $0.id == historyEntryID })
+    }
+
+    var currentDiffTargetSectionID: String? {
+        guard let activeDomainDiff, activeDomainDiff.changedSectionIDs.indices.contains(activeDiffChangeIndex) else {
+            return nil
+        }
+        return activeDomainDiff.changedSectionIDs[activeDiffChangeIndex]
+    }
+
+    func moveToNextDiffChange() {
+        guard let activeDomainDiff, !activeDomainDiff.changedSectionIDs.isEmpty else { return }
+        activeDiffChangeIndex = min(activeDiffChangeIndex + 1, activeDomainDiff.changedSectionIDs.count - 1)
+    }
+
+    func moveToPreviousDiffChange() {
+        guard activeDomainDiff != nil else { return }
+        activeDiffChangeIndex = max(activeDiffChangeIndex - 1, 0)
     }
 
     private func exportSnapshots(for domains: [TrackedDomain]) -> [LookupSnapshot] {
@@ -2709,6 +2962,10 @@ final class DomainViewModel {
         }
     }
 
+    private func timelineReports(for domain: String) -> [DomainReport] {
+        historyEntries(for: domain).map { report(for: $0) }
+    }
+
     private func report(for entry: HistoryEntry, workflowContext: DomainWorkflowContext? = nil) -> DomainReport {
         reportBuilder.build(from: entry, previousSnapshot: comparisonSnapshot(for: entry), workflowContext: workflowContext)
     }
@@ -2745,6 +3002,10 @@ final class DomainViewModel {
             isPartialSnapshot: true,
             validationIssues: ["No stored snapshot data available"],
             totalLookupDurationMs: nil,
+            snapshotIndex: nil,
+            previousSnapshotID: nil,
+            changeCount: 0,
+            severitySummary: trackedDomain.lastChangeSeverity,
             dnsSections: [],
             dnsError: nil,
             availabilityResult: DomainAvailabilityResult(domain: trackedDomain.domain, status: trackedDomain.lastKnownAvailability ?? .unknown),
@@ -2793,6 +3054,14 @@ final class DomainViewModel {
     private static func loadHistoryEntries() -> [HistoryEntry] {
         DataMigrationService.migrateIfNeeded()
         return DomainDataPortabilityService.loadHistoryEntries()
+    }
+
+    private static func loadHistoryAutoPruneOption() -> HistoryAutoPruneOption {
+        guard let rawValue = UserDefaults.standard.string(forKey: historyAutoPruneKey),
+              let option = HistoryAutoPruneOption(rawValue: rawValue) else {
+            return .unlimited
+        }
+        return option
     }
 
     private static func loadTrackedDomains() -> [TrackedDomain] {

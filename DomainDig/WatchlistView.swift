@@ -483,7 +483,8 @@ struct TrackedDomainDetailView: View {
                         contextNote: latestSnapshots.count >= 2
                             ? DomainDiffService.comparisonContextNote(from: latestSnapshots[1].snapshot, to: latestSnapshots[0].snapshot)
                             : nil,
-                        showsUnchanged: false
+                        showsUnchanged: false,
+                        highlightedSectionID: nil
                     )
                 }
                 .listRowBackground(Color.clear)

@@ -48,6 +48,7 @@ enum RDAPService {
 }
 
 private func fetchRDAPResponse(for domain: String) async -> ServiceResult<RDAPDomainResponse> {
+    let startedAt = DomainDebugLog.signpostStart("RDAP.fetch", domain: domain)
     guard let url = URL(string: "https://rdap.org/domain/\(domain)") else {
         return .error("Unavailable")
     }
@@ -55,9 +56,11 @@ private func fetchRDAPResponse(for domain: String) async -> ServiceResult<RDAPDo
     do {
         var request = URLRequest(url: url, timeoutInterval: 8)
         request.setValue("application/rdap+json, application/json", forHTTPHeaderField: "Accept")
+        DomainDebugLog.debug("RDAP.request url=\(url.absoluteString) timeout=8")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
+            DomainDebugLog.error("RDAP.badResponse domain=\(domain) response=nil")
             return .error(URLError(.badServerResponse).localizedDescription)
         }
 
@@ -66,15 +69,22 @@ private func fetchRDAPResponse(for domain: String) async -> ServiceResult<RDAPDo
             let decoder = JSONDecoder()
             let rdapResponse = try decoder.decode(RDAPDomainResponse.self, from: data)
             guard rdapResponse.isDomainRecord else {
+                DomainDebugLog.signpostEnd("RDAP.fetch", start: startedAt, domain: domain, extra: "status=200 nonDomainRecord")
                 return .empty("Unavailable")
             }
+            DomainDebugLog.signpostEnd("RDAP.fetch", start: startedAt, domain: domain, extra: "status=200 bytes=\(data.count)")
             return .success(rdapResponse)
         case 404:
+            DomainDebugLog.signpostEnd("RDAP.fetch", start: startedAt, domain: domain, extra: "status=404")
             return .empty("Unavailable")
         default:
+            DomainDebugLog.error("RDAP.httpError domain=\(domain) status=\(httpResponse.statusCode)")
+            DomainDebugLog.signpostEnd("RDAP.fetch", start: startedAt, domain: domain, extra: "status=\(httpResponse.statusCode)")
             return .error("Unavailable")
         }
     } catch {
+        DomainDebugLog.error("RDAP.error domain=\(domain) error=\(error.localizedDescription)")
+        DomainDebugLog.signpostEnd("RDAP.fetch", start: startedAt, domain: domain, extra: "error")
         return .error(error.localizedDescription)
     }
 }

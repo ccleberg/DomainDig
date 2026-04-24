@@ -17,6 +17,7 @@ enum SubdomainDiscoveryService {
     }
 
     private static func fetchSubdomains(for domain: String, limit: Int) async -> ServiceResult<[DiscoveredSubdomain]> {
+        let startedAt = DomainDebugLog.signpostStart("SubdomainDiscovery.fetch", domain: domain)
         var components = URLComponents(string: "https://crt.sh/")!
         components.queryItems = [
             URLQueryItem(name: "q", value: "%.\(domain)"),
@@ -29,15 +30,25 @@ enum SubdomainDiscoveryService {
 
         do {
             let request = URLRequest(url: url, timeoutInterval: 10)
+            DomainDebugLog.debug("SubdomainDiscovery.request url=\(url.absoluteString) timeout=10")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                DomainDebugLog.error("SubdomainDiscovery.badResponse domain=\(domain)")
                 return .error("Subdomain discovery unavailable")
             }
 
             let entries = try JSONDecoder().decode([CRTShEntry].self, from: data)
             let subdomains = parseSubdomains(from: entries, domain: domain, limit: limit)
+            DomainDebugLog.signpostEnd(
+                "SubdomainDiscovery.fetch",
+                start: startedAt,
+                domain: domain,
+                extra: "entries=\(entries.count) subdomains=\(subdomains.count)"
+            )
             return subdomains.isEmpty ? .empty("No passive subdomains found") : .success(subdomains)
         } catch {
+            DomainDebugLog.error("SubdomainDiscovery.error domain=\(domain) error=\(error.localizedDescription)")
+            DomainDebugLog.signpostEnd("SubdomainDiscovery.fetch", start: startedAt, domain: domain, extra: "error")
             return .error(error.localizedDescription)
         }
     }

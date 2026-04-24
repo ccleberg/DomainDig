@@ -124,7 +124,7 @@ struct PortScanService {
     }
 
     private static func probe(domain: String, port: UInt16) async -> PortProbeResult {
-        await probe(domain: domain, port: port, timeout: 5)
+        await probe(domain: domain, port: port, timeout: 1.5)
     }
 
     private static func probe(domain: String, port: UInt16, timeout: TimeInterval) async -> PortProbeResult {

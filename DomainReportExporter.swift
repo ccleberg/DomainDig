@@ -504,6 +504,62 @@ enum DomainReportExporter {
             .joined(separator: "\n")
     }
 
+    static func timelineText(for reports: [DomainReport], domain: String, includeDiffSummary: Bool) -> String {
+        guard !reports.isEmpty else {
+            return "Timeline Export\nNo snapshots available for \(domain)."
+        }
+
+        var lines = [
+            "DomainDig Timeline Export",
+            "Domain: \(domain)",
+            "Snapshots: \(reports.count)"
+        ]
+
+        for report in reports.sorted(by: { $0.timestamp > $1.timestamp }) {
+            lines.append("")
+            lines.append("\(textDateFormatter.string(from: report.timestamp))")
+            lines.append("Summary: \(report.changeSummary?.message ?? "No change summary")")
+            lines.append("Severity: \(report.changeSummary?.severity.title ?? "N/A")")
+            if includeDiffSummary, let changeSummary = report.changeSummary {
+                lines.append("Changed Sections: \(changeSummary.changedSections.joined(separator: ", ").nilIfEmpty ?? "None")")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    static func timelineData(for reports: [DomainReport], domain: String, includeDiffSummary: Bool) throws -> Data {
+        struct TimelineExportEntry: Codable {
+            let timestamp: Date
+            let summary: String?
+            let severity: String?
+            let changedSections: [String]?
+        }
+
+        struct TimelineExportPayload: Codable {
+            let domain: String
+            let exportedAt: Date
+            let snapshots: [TimelineExportEntry]
+        }
+
+        let payload = TimelineExportPayload(
+            domain: domain,
+            exportedAt: Date(),
+            snapshots: reports
+                .sorted(by: { $0.timestamp > $1.timestamp })
+                .map { report in
+                    TimelineExportEntry(
+                        timestamp: report.timestamp,
+                        summary: report.changeSummary?.message,
+                        severity: report.changeSummary?.severity.title,
+                        changedSections: includeDiffSummary ? report.changeSummary?.changedSections : nil
+                    )
+                }
+        )
+
+        return try jsonEncoder.encode(payload)
+    }
+
     private static func appendSection(_ title: String, to lines: inout [String], body: () -> [String]) {
         lines.append("")
         lines.append(title)

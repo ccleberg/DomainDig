@@ -7,8 +7,12 @@ struct HistoryView: View {
     @State private var showClearAllConfirmation = false
     @State private var showWorkflowAddSheet = false
 
-    private var groupedHistory: [HistoryGroup] {
-        HistoryGroup.groups(for: viewModel.filteredHistory)
+    private var domainSummaries: [(domain: String, latest: SnapshotSummary, count: Int)] {
+        viewModel.timelineDomains.compactMap { domain in
+            let entries = viewModel.timelineEntries(for: domain)
+            guard let latest = entries.first else { return nil }
+            return (domain, latest, entries.count)
+        }
     }
 
     var body: some View {
@@ -22,53 +26,39 @@ struct HistoryView: View {
                 )
                     .listRowBackground(Color(.systemGray6).opacity(0.5))
             } else {
-                ForEach(groupedHistory) { group in
-                    Section(group.title) {
-                        ForEach(group.entries) { entry in
-                            NavigationLink {
-                                HistoryDetailView(viewModel: viewModel, entry: entry)
-                            } label: {
-                                VStack(alignment: .leading, spacing: appDensity.metrics.rowSpacing + 1) {
-                                    HStack(alignment: .center, spacing: 8) {
-                                        Text(entry.domain)
-                                            .font(appDensity.font(.callout))
-                                            .foregroundStyle(.primary)
-                                        Spacer()
-                                        AppStatusBadgeView(model: AppStatusFactory.change(entry.changeSummary))
-                                    }
-
-                                    HStack(spacing: 8) {
-                                        AppStatusBadgeView(model: AppStatusFactory.availability(entry.availabilityResult?.status))
-                                        AppStatusBadgeView(model: AppStatusFactory.tls(sslInfo: entry.sslInfo, error: entry.sslError))
-                                        if entry.isPartialSnapshot {
-                                            AppStatusBadgeView(model: .init(title: "Partial", systemImage: "exclamationmark.triangle.fill", foregroundColor: .yellow, backgroundColor: .yellow.opacity(0.16)))
-                                        }
-                                    }
-
-                                    HStack(spacing: 8) {
-                                        Text(entry.timestamp.formatted(date: .abbreviated, time: .shortened))
-                                        Text(entry.timestamp.formatted(.relative(presentation: .named)))
-                                        Text(entry.resolverDisplayName)
-                                        if let totalLookupDurationMs = entry.totalLookupDurationMs {
-                                            Text("\(totalLookupDurationMs) ms")
-                                        }
-                                    }
-                                    .font(appDensity.font(.caption2))
-                                    .foregroundStyle(.secondary)
-
-                                    if let note = entry.note, !note.isEmpty {
-                                        Text(note)
-                                            .font(appDensity.font(.caption2))
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
+                Section("Domains") {
+                    ForEach(domainSummaries, id: \.domain) { item in
+                        NavigationLink {
+                            TimelineView(viewModel: viewModel, domain: item.domain)
+                        } label: {
+                            VStack(alignment: .leading, spacing: appDensity.metrics.rowSpacing + 1) {
+                                HStack(alignment: .center, spacing: 8) {
+                                    Text(item.domain)
+                                        .font(appDensity.font(.callout))
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    Text("\(item.count) snapshots")
+                                        .font(appDensity.font(.caption2))
+                                        .foregroundStyle(.secondary)
                                 }
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    viewModel.removeHistoryEntries(withIDs: [entry.id])
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+
+                                Text(item.latest.changeSummaryMessage ?? "No change summary")
+                                    .font(appDensity.font(.caption))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+
+                                HStack(spacing: 8) {
+                                    AppStatusBadgeView(model: AppStatusFactory.availability(item.latest.availability))
+                                    if let severity = item.latest.severitySummary {
+                                        AppStatusBadgeView(
+                                            model: .init(
+                                                title: severity.title,
+                                                systemImage: "arrow.triangle.2.circlepath",
+                                                foregroundColor: severity == .high ? .red : .yellow,
+                                                backgroundColor: (severity == .high ? Color.red : .yellow).opacity(0.16)
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -80,7 +70,7 @@ struct HistoryView: View {
         .scrollContentBackground(.hidden)
         .background(Color.black)
         .navigationTitle("History")
-        .searchable(text: $viewModel.historySearchText, prompt: "Search domains")
+        .searchable(text: $viewModel.timelineDomainFilter, prompt: "Search domains")
         .toolbar {
             if !viewModel.history.isEmpty {
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -244,7 +234,8 @@ struct HistoryDetailView: View {
                         title: "Compared With Previous Snapshot",
                         sections: DomainDiffService.diff(from: comparisonSnapshot, to: snapshot),
                         contextNote: DomainDiffService.comparisonContextNote(from: comparisonSnapshot, to: snapshot),
-                        showsUnchanged: false
+                        showsUnchanged: false,
+                        highlightedSectionID: nil
                     )
                     .padding(.top, appDensity.metrics.sectionSpacing)
                 }

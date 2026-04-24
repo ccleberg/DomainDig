@@ -17,6 +17,16 @@ struct DomainDigCLI {
             return
         }
 
+        if arguments.first == "history" {
+            runHistoryCommand(arguments: Array(arguments.dropFirst()), wantsJSON: wantsJSON)
+            return
+        }
+
+        if arguments.first == "diff" {
+            runDiffCommand(arguments: Array(arguments.dropFirst()), wantsJSON: wantsJSON)
+            return
+        }
+
         if arguments.first == "monitor" {
             await runMonitorCommand(wantsJSON: wantsJSON)
             return
@@ -216,6 +226,10 @@ struct DomainDigCLI {
             isPartialSnapshot: snapshot.isPartialSnapshot,
             validationIssues: snapshot.validationIssues,
             totalLookupDurationMs: snapshot.totalLookupDurationMs,
+            snapshotIndex: snapshot.snapshotIndex,
+            previousSnapshotID: snapshot.previousSnapshotID,
+            changeCount: snapshot.changeCount,
+            severitySummary: snapshot.severitySummary,
             dnsSections: snapshot.dnsSections,
             dnsError: snapshot.dnsError,
             availabilityResult: snapshot.availabilityResult,
@@ -263,6 +277,107 @@ struct DomainDigCLI {
 
     private static func loadHistoryEntries() -> [HistoryEntry] {
         DomainDataPortabilityService.loadHistoryEntries()
+    }
+
+    private static func runHistoryCommand(arguments: [String], wantsJSON: Bool) {
+        guard let domain = arguments.first(where: { !$0.hasPrefix("-") }) else {
+            fputs("usage: domaindig history <domain> [--json]\n", stderr)
+            Foundation.exit(1)
+        }
+
+        let entries = loadHistoryEntries()
+            .filter { $0.domain.caseInsensitiveCompare(domain) == .orderedSame }
+            .sorted { $0.timestamp > $1.timestamp }
+
+        if wantsJSON {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let payload = entries.map { entry in
+                [
+                    "id": entry.id.uuidString,
+                    "timestamp": ISO8601DateFormatter().string(from: entry.timestamp),
+                    "changeSummary": entry.changeSummary?.message ?? "No change summary",
+                    "changeCount": "\(entry.changeCount)",
+                    "severity": entry.severitySummary?.title ?? "N/A"
+                ]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
+                FileHandle.standardOutput.write(data)
+                FileHandle.standardOutput.write(Data([0x0A]))
+                return
+            }
+        }
+
+        let lines = entries.map { entry in
+            [
+                entry.id.uuidString,
+                entry.timestamp.formatted(date: .abbreviated, time: .shortened),
+                entry.changeSummary?.message ?? "No change summary"
+            ].joined(separator: " | ")
+        }
+
+        FileHandle.standardOutput.write(Data((lines.isEmpty ? "No history found.\n" : lines.joined(separator: "\n") + "\n").utf8))
+    }
+
+    private static func runDiffCommand(arguments: [String], wantsJSON: Bool) {
+        guard let domain = arguments.first(where: { !$0.hasPrefix("-") }) else {
+            fputs("usage: domaindig diff <domain> --from <id> --to <id> [--json]\n", stderr)
+            Foundation.exit(1)
+        }
+
+        guard let fromID = optionValue(named: "--from", in: arguments),
+              let toID = optionValue(named: "--to", in: arguments),
+              let fromUUID = UUID(uuidString: fromID),
+              let toUUID = UUID(uuidString: toID) else {
+            fputs("domaindig diff: --from and --to must be valid snapshot IDs\n", stderr)
+            Foundation.exit(1)
+        }
+
+        let entries = loadHistoryEntries().filter { $0.domain.caseInsensitiveCompare(domain) == .orderedSame }
+        guard let fromEntry = entries.first(where: { $0.id == fromUUID }),
+              let toEntry = entries.first(where: { $0.id == toUUID }) else {
+            fputs("domaindig diff: snapshots not found for domain\n", stderr)
+            Foundation.exit(1)
+        }
+
+        let orderedEntries = [fromEntry, toEntry].sorted { $0.timestamp < $1.timestamp }
+        let diff = DiffService.compare(from: orderedEntries[0].snapshot, to: orderedEntries[1].snapshot)
+
+        if wantsJSON {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            if let data = try? encoder.encode(diff) {
+                FileHandle.standardOutput.write(data)
+                FileHandle.standardOutput.write(Data([0x0A]))
+                return
+            }
+        }
+
+        var lines = [
+            "DomainDig Diff",
+            "Domain: \(domain)",
+            "From: \(orderedEntries[0].id.uuidString)",
+            "To: \(orderedEntries[1].id.uuidString)"
+        ]
+
+        for section in diff.sections where section.hasChanges {
+            lines.append("")
+            lines.append(section.title)
+            for item in section.items where item.hasChanges {
+                lines.append("\(item.changeType.marker) \(item.label): \(item.oldValue ?? "none") -> \(item.newValue ?? "none")")
+            }
+        }
+
+        FileHandle.standardOutput.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+    }
+
+    private static func optionValue(named name: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
+            return nil
+        }
+        return arguments[index + 1]
     }
 
     private static func runBackupCommand(arguments: [String], wantsJSON: Bool) {
@@ -424,6 +539,8 @@ struct DomainDigCLI {
     private static var usageText: String {
         """
         usage: domaindig <domain> [--json] [--ownership-history] [--dns-history] [--extended-subdomains] [--pricing] [--show-usage]
+               domaindig history <domain> [--json]
+               domaindig diff <domain> --from <id> --to <id> [--json]
                domaindig monitor [--json]
                domaindig backup export [path]
                domaindig backup import <path> [--replace]

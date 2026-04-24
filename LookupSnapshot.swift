@@ -20,6 +20,10 @@ struct LookupSnapshot {
     let isPartialSnapshot: Bool
     let validationIssues: [String]
     let totalLookupDurationMs: Int?
+    let snapshotIndex: Int?
+    let previousSnapshotID: UUID?
+    let changeCount: Int
+    let severitySummary: ChangeSeverity?
     let dnsSections: [DNSSection]
     let dnsError: String?
     let availabilityResult: DomainAvailabilityResult?
@@ -90,6 +94,10 @@ extension HistoryEntry {
             isPartialSnapshot: isPartialSnapshot,
             validationIssues: validationIssues,
             totalLookupDurationMs: totalLookupDurationMs,
+            snapshotIndex: snapshotIndex,
+            previousSnapshotID: previousSnapshotID,
+            changeCount: changeCount,
+            severitySummary: severitySummary,
             dnsSections: dnsSections,
             dnsError: nil,
             availabilityResult: availabilityResult,

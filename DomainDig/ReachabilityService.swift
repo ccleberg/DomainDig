@@ -23,7 +23,7 @@ struct ReachabilityService {
             let queue = DispatchQueue(label: "reachability.\(port)")
             connection.start(queue: queue)
 
-            queue.asyncAfter(deadline: .now() + 5) {
+            queue.asyncAfter(deadline: .now() + 2) {
                 context.finish(reachable: false)
             }
         }

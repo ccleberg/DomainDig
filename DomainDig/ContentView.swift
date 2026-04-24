@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var collapsedSections: Set<ResultSection> = [.network]
     @State private var showingCurrentDomainWorkflowSheet = false
     @State private var showingBatchWorkflowSheet = false
+    @State private var showingTimeline = false
 
     var body: some View {
         let _ = purchaseService.currentTier
@@ -83,7 +84,8 @@ struct ContentView: View {
                                 title: "Latest Changes",
                                 sections: viewModel.currentDiffSections,
                                 contextNote: viewModel.currentChangeSummary?.contextNote,
-                                showsUnchanged: false
+                                showsUnchanged: false,
+                                highlightedSectionID: nil
                             )
                             .padding(.top, appDensity.metrics.sectionSpacing)
                         }
@@ -229,6 +231,11 @@ struct ContentView: View {
                 title: "Add Batch Domains",
                 availableDomains: viewModel.batchResults.map(\.domain)
             )
+        }
+        .sheet(isPresented: $showingTimeline) {
+            NavigationStack {
+                TimelineView(viewModel: viewModel, domain: viewModel.searchedDomain)
+            }
         }
     }
 
@@ -438,6 +445,11 @@ struct ContentView: View {
                     }
                     Button("Add to workflow") {
                         showingCurrentDomainWorkflowSheet = true
+                    }
+                    if !viewModel.historyEntries(for: viewModel.searchedDomain).isEmpty {
+                        Button("Open timeline") {
+                            showingTimeline = true
+                        }
                     }
                     if FeatureAccessService.hasAccess(to: .advancedExports) {
                         Button("Copy report JSON") {
@@ -1048,8 +1060,9 @@ struct DomainDiffView: View {
     let sections: [DomainDiffSection]
     let contextNote: String?
     let showsUnchanged: Bool
+    let highlightedSectionID: String?
 
-    @State private var collapsedSections = Set<UUID>()
+    @State private var collapsedSections = Set<String>()
     @State private var showsLowSeverity = false
 
     private var filteredSections: [DomainDiffSection] {
@@ -1064,7 +1077,7 @@ struct DomainDiffView: View {
                     }
                     return item.severity >= .medium || (showsUnchanged && item.changeType == .unchanged)
                 }
-                return DomainDiffSection(title: section.title, items: items)
+                return DomainDiffSection(id: section.id, title: section.title, items: items)
             }
             .filter { !$0.items.isEmpty }
     }
@@ -1104,7 +1117,7 @@ struct DomainDiffView: View {
                                             .font(.system(.caption, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                         Spacer()
-                                        Text("\(item.severity.title) • \(changeLabel(for: item.changeType))")
+                                        Text("\(item.changeType.marker) \(item.severity.title) • \(changeLabel(for: item.changeType))")
                                             .font(.system(.caption2, design: .monospaced))
                                             .foregroundStyle(changeColor(for: item))
                                             .padding(.horizontal, 8)
@@ -1154,8 +1167,18 @@ struct DomainDiffView: View {
                             }
                         }
                     }
+                    .id(section.id)
+                    .overlay {
+                        if highlightedSectionID == section.id {
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.cyan.opacity(0.55), lineWidth: 1)
+                        }
+                    }
                 }
             }
+        }
+        .onAppear {
+            collapsedSections = Set(sections.filter { !showsUnchanged && !$0.hasChanges }.map(\.id))
         }
     }
 
@@ -2458,6 +2481,24 @@ struct SettingsView: View {
                         Text(density.title).tag(density.rawValue)
                     }
                 }
+            }
+
+            Section("History") {
+                Picker(
+                    "Auto-prune",
+                    selection: Binding(
+                        get: { viewModel.historyAutoPruneOption },
+                        set: { viewModel.setHistoryAutoPruneOption($0) }
+                    )
+                ) {
+                    ForEach(HistoryAutoPruneOption.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+
+                Text("History remains local-first. Auto-prune only trims older local snapshots on this device and defaults to unlimited.")
+                    .font(appDensity.font(.caption, design: .default))
+                    .foregroundStyle(.secondary)
             }
 
             Section("Network") {

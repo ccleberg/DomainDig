@@ -15,6 +15,7 @@ struct DomainInspectionService {
 
     func inspectSnapshot(domain: String, previousSnapshot: LookupSnapshot? = nil) async -> LookupSnapshot {
         let normalizedDomain = normalize(domain)
+        let inspectionStartedAt = DomainDebugLog.signpostStart("Inspection.inspectSnapshot", domain: normalizedDomain)
         let startedAt = Date()
         let resolverDisplayName = DNSLookupService.currentResolverDisplayName()
         let resolverURLString = DNSLookupService.currentResolverURLString()
@@ -29,13 +30,12 @@ struct DomainInspectionService {
         async let sslFetch = runtime.ssl(domain: normalizedDomain)
         async let hstsFetch = runtime.hsts(domain: normalizedDomain)
         async let httpFetch = runtime.http(domain: normalizedDomain)
-        async let reachabilityFetch = runtime.reachability(domain: normalizedDomain)
         async let ownershipFetch = runtime.ownership(domain: normalizedDomain)
         async let redirectFetch = runtime.redirectChain(domain: normalizedDomain)
         async let subdomainFetch = runtime.subdomains(domain: normalizedDomain)
-        async let portScanFetch = runtime.portScan(domain: normalizedDomain)
 
         let resolvedDNS = await dnsFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=dns source=\(resolvedDNS.source.rawValue)")
         let dnsResult = normalizeErrors(in: resolvedDNS.value)
         track(
             .dns,
@@ -49,6 +49,7 @@ struct DomainInspectionService {
         captureFailure(for: .dns, result: dnsResult, into: &errorDetails)
 
         let availability = await availabilityFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=availability source=\(availability.source.rawValue)")
         track(
             .availability,
             source: availability.source,
@@ -60,6 +61,7 @@ struct DomainInspectionService {
         )
 
         let resolvedSSL = await sslFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=ssl source=\(resolvedSSL.source.rawValue)")
         let sslResult = normalizeErrors(in: resolvedSSL.value)
         track(
             .ssl,
@@ -73,6 +75,7 @@ struct DomainInspectionService {
         captureFailure(for: .ssl, result: sslResult, into: &errorDetails)
 
         let hsts = await hstsFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=hsts source=\(hsts.source.rawValue)")
         track(
             .hsts,
             source: hsts.source,
@@ -84,6 +87,7 @@ struct DomainInspectionService {
         )
 
         let http = await httpFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=http source=\(http.source.rawValue)")
         let httpResult = normalizeErrors(in: http.value)
         track(
             .httpHeaders,
@@ -96,20 +100,8 @@ struct DomainInspectionService {
         )
         captureFailure(for: .httpHeaders, result: httpResult, into: &errorDetails)
 
-        let reachability = await reachabilityFetch
-        let reachabilityResult = normalizeErrors(in: reachability.value)
-        track(
-            .reachability,
-            source: reachability.source,
-            provenance: provenance(for: .reachability, source: reachability.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
-            cachedSections: &cachedSections,
-            sectionSources: &sectionSources,
-            provenanceBySection: &provenanceBySection,
-            dataSources: &dataSources
-        )
-        captureFailure(for: .reachability, result: reachabilityResult, into: &errorDetails)
-
         let resolvedOwnership = await ownershipFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=ownership source=\(resolvedOwnership.source.rawValue)")
         let ownershipResult = normalizeErrors(in: resolvedOwnership.value)
         track(
             .ownership,
@@ -123,6 +115,7 @@ struct DomainInspectionService {
         captureFailure(for: .ownership, result: ownershipResult, into: &errorDetails)
 
         let redirects = await redirectFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=redirect source=\(redirects.source.rawValue)")
         let redirectResult = normalizeErrors(in: redirects.value)
         track(
             .redirectChain,
@@ -136,6 +129,7 @@ struct DomainInspectionService {
         captureFailure(for: .redirectChain, result: redirectResult, into: &errorDetails)
 
         let resolvedSubdomains = await subdomainFetch
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=subdomains source=\(resolvedSubdomains.source.rawValue)")
         let subdomainResult = normalizeErrors(in: resolvedSubdomains.value)
         track(
             .subdomains,
@@ -148,32 +142,67 @@ struct DomainInspectionService {
         )
         captureFailure(for: .subdomains, result: subdomainResult, into: &errorDetails)
 
-        let ports = await portScanFetch
-        let portScanResult = normalizeErrors(in: ports.value)
+        let dnsSections = mapServiceResult(dnsResult, emptyValue: [])
+        let sslInfo = mapOptionalValueServiceResult(sslResult)
+        let httpHeadersResult = mapHTTPResult(httpResult)
+        let redirectChain = mapServiceResult(redirectResult, emptyValue: [])
+        let ownership = mapOptionalValueServiceResult(ownershipResult)
+        let subdomains = mapServiceResult(subdomainResult, emptyValue: [])
+
+        let txtRecords = dnsSections.value.first(where: { $0.recordType == .TXT })?.records ?? []
+        let primaryIP = dnsSections.value.first(where: { $0.recordType == .A })?.records.first?.value
+        let hasNetworkTarget = dnsSections.value.contains { section in
+            (section.recordType == .A || section.recordType == .AAAA)
+                && (!section.records.isEmpty || !section.wildcardRecords.isEmpty)
+        }
+        let canReuseDNSDependents = canReuseDependentSections(from: previousSnapshot, dnsSections: dnsSections.value)
+        let canReuseIPDependents = canReuseIPBasedSections(from: previousSnapshot, primaryIP: primaryIP)
+
+        let reachabilityOutcome: CachedLookupResult<ServiceResult<[PortReachability]>>
+        if hasNetworkTarget {
+            reachabilityOutcome = await runtime.reachability(domain: normalizedDomain)
+        } else {
+            reachabilityOutcome = CachedLookupResult(value: .empty("No routable address available"), source: .live)
+        }
+        let reachabilityResult = normalizeErrors(in: reachabilityOutcome.value)
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=reachability hasNetworkTarget=\(hasNetworkTarget) source=\(reachabilityOutcome.source.rawValue)")
         track(
-            .portScan,
-            source: ports.source,
-            provenance: provenance(for: .portScan, source: ports.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            .reachability,
+            source: reachabilityOutcome.source,
+            provenance: provenance(for: .reachability, source: reachabilityOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
             cachedSections: &cachedSections,
             sectionSources: &sectionSources,
             provenanceBySection: &provenanceBySection,
             dataSources: &dataSources
         )
-        captureFailure(for: .portScan, result: portScanResult, into: &errorDetails)
-
-        let dnsSections = mapServiceResult(dnsResult, emptyValue: [])
-        let sslInfo = mapOptionalValueServiceResult(sslResult)
-        let httpHeadersResult = mapHTTPResult(httpResult)
+        if hasNetworkTarget {
+            captureFailure(for: .reachability, result: reachabilityResult, into: &errorDetails)
+        }
         let reachabilityResultValue = mapServiceResult(reachabilityResult, emptyValue: [])
-        let redirectChain = mapServiceResult(redirectResult, emptyValue: [])
-        let ownership = mapOptionalValueServiceResult(ownershipResult)
-        let subdomains = mapServiceResult(subdomainResult, emptyValue: [])
-        let portScanResults = await mapPortScanResult(portScanResult, domain: normalizedDomain)
 
-        let txtRecords = dnsSections.value.first(where: { $0.recordType == .TXT })?.records ?? []
-        let primaryIP = dnsSections.value.first(where: { $0.recordType == .A })?.records.first?.value
-        let canReuseDNSDependents = canReuseDependentSections(from: previousSnapshot, dnsSections: dnsSections.value)
-        let canReuseIPDependents = canReuseIPBasedSections(from: previousSnapshot, primaryIP: primaryIP)
+        let portScanOutcome: CachedLookupResult<ServiceResult<[PortScanResult]>>
+        if hasNetworkTarget {
+            portScanOutcome = await runtime.portScan(domain: normalizedDomain)
+        } else {
+            portScanOutcome = CachedLookupResult(value: .empty("No routable address available"), source: .live)
+        }
+        let portScanResult = normalizeErrors(in: portScanOutcome.value)
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=portScan hasNetworkTarget=\(hasNetworkTarget) source=\(portScanOutcome.source.rawValue)")
+        track(
+            .portScan,
+            source: portScanOutcome.source,
+            provenance: provenance(for: .portScan, source: portScanOutcome.source, collectedAt: Date(), resolverDisplayName: resolverDisplayName),
+            cachedSections: &cachedSections,
+            sectionSources: &sectionSources,
+            provenanceBySection: &provenanceBySection,
+            dataSources: &dataSources
+        )
+        if hasNetworkTarget {
+            captureFailure(for: .portScan, result: portScanResult, into: &errorDetails)
+        }
+        let portScanResults = hasNetworkTarget
+            ? await mapPortScanResult(portScanResult, domain: normalizedDomain)
+            : (value: [], message: nil)
 
         let emailOutcome: CachedLookupResult<ServiceResult<EmailSecurityResult>>
         if canReuseDNSDependents, let previousSnapshot, let emailSecurity = previousSnapshot.emailSecurity {
@@ -184,6 +213,7 @@ struct DomainInspectionService {
             emailOutcome = await runtime.email(domain: normalizedDomain, txtRecords: txtRecords)
         }
         let normalizedEmailResult = normalizeErrors(in: emailOutcome.value)
+        DomainDebugLog.debug("Inspection.sectionComplete domain=\(normalizedDomain) section=email source=\(emailOutcome.source.rawValue)")
         track(
             .emailSecurity,
             source: emailOutcome.source,
@@ -271,7 +301,7 @@ struct DomainInspectionService {
         let geolocationConfidence = confidenceForGeolocation(result: geolocation.value, error: geolocation.message)
         let validationIssues = validationIssues(for: normalizedDomain, snapshotTimestamp: startedAt, availability: availability.value, dnsSections: dnsSections.value, provenanceBySection: provenanceBySection)
 
-        return LookupSnapshot(
+        let snapshot = LookupSnapshot(
             historyEntryID: nil,
             domain: availability.value.domain,
             timestamp: Date(),
@@ -291,6 +321,10 @@ struct DomainInspectionService {
             isPartialSnapshot: !validationIssues.isEmpty,
             validationIssues: validationIssues,
             totalLookupDurationMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+            snapshotIndex: nil,
+            previousSnapshotID: previousSnapshot?.historyEntryID,
+            changeCount: 0,
+            severitySummary: nil,
             dnsSections: dnsSections.value,
             dnsError: dnsSections.message,
             availabilityResult: availability.value,
@@ -334,6 +368,13 @@ struct DomainInspectionService {
             cachedSections: Array(cachedSections).sorted { $0.rawValue < $1.rawValue },
             statusMessage: nil
         )
+        DomainDebugLog.signpostEnd(
+            "Inspection.inspectSnapshot",
+            start: inspectionStartedAt,
+            domain: normalizedDomain,
+            extra: "resultSource=\(snapshot.resultSource.rawValue) cachedSections=\(snapshot.cachedSections.count) partial=\(snapshot.isPartialSnapshot)"
+        )
+        return snapshot
     }
 
     private func normalize(_ domain: String) -> String {
