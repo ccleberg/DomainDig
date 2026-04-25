@@ -177,6 +177,28 @@ final class IntegrationService {
         scheduleProcessing(force: true)
     }
 
+    func localSecretReferences() -> [String] {
+        targets.compactMap { target in
+            switch target.configuration {
+            case .webhook(let configuration):
+                configuration.credentialReference
+            case .slack(let configuration):
+                configuration.credentialReference
+            case .email(let configuration):
+                configuration.credentialReference
+            }
+        }
+    }
+
+    func resetAfterLocalWipe() {
+        processingTask?.cancel()
+        processingTask = nil
+        targets = []
+        deliveryRecords = []
+        queue = []
+        statusMessage = nil
+    }
+
     private func scheduleProcessing(force: Bool = false) {
         if force {
             processingTask?.cancel()

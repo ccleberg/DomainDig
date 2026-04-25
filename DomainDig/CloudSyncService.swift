@@ -321,6 +321,20 @@ final class CloudSyncService {
         }
     }
 
+    func resetLocalStateAfterWipe() {
+        scheduledSyncTask?.cancel()
+        scheduledSyncTask = nil
+        syncTask?.cancel()
+        syncTask = nil
+
+        let syncEnabled = defaults.bool(forKey: StorageKey.isEnabled)
+        isEnabled = syncEnabled
+        status = CloudSyncStatus(rawValue: defaults.string(forKey: StorageKey.status) ?? "") ?? (syncEnabled ? .synced : .disabled)
+        lastSyncDate = defaults.object(forKey: StorageKey.lastSyncDate) as? Date
+        lastErrorMessage = defaults.string(forKey: StorageKey.lastErrorMessage)
+        detailMessage = defaults.string(forKey: StorageKey.detailMessage) ?? "DomainDig stores synced data in your private iCloud account."
+    }
+
     func acceptShare(metadata: CKShare.Metadata) async throws {
         guard let container = cloudKitContainer() else {
             throw CloudSyncRuntimeError.missingEntitlement

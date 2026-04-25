@@ -261,11 +261,27 @@ struct ContentView: View {
                 availableDomains: viewModel.batchResults.map(\.domain)
             )
         }
+        .sheet(item: manualBatchSummaryBinding) { summary in
+            BatchSweepSummaryView(viewModel: viewModel, summary: summary)
+        }
         .sheet(isPresented: $showingTimeline) {
             NavigationStack {
                 TimelineView(viewModel: viewModel, domain: viewModel.searchedDomain)
             }
         }
+    }
+
+    private var manualBatchSummaryBinding: Binding<BatchSweepSummary?> {
+        Binding(
+            get: {
+                guard let summary = viewModel.latestBatchSweepSummary,
+                      summary.source == .manual else {
+                    return nil
+                }
+                return summary
+            },
+            set: { viewModel.latestBatchSweepSummary = $0 }
+        )
     }
 
     private var inputSection: some View {
@@ -3257,6 +3273,10 @@ private struct DataManagementSettingsView: View {
     @State private var showClearCacheConfirmation = false
     @State private var showClearWorkflowsConfirmation = false
     @State private var showClearTrackedDomainsConfirmation = false
+    @State private var showDeleteAllConfirmation = false
+    @State private var deleteAllErrorMessage: String?
+    @State private var deleteAllSuccessMessage: String?
+    @State private var isDeletingAllData = false
 
     var body: some View {
         Form {
@@ -3277,7 +3297,28 @@ private struct DataManagementSettingsView: View {
                     showClearTrackedDomainsConfirmation = true
                 }
             }
+
+            Section {
+                Button(role: .destructive) {
+                    showDeleteAllConfirmation = true
+                } label: {
+                    HStack {
+                        Text("Delete All Data")
+                        Spacer()
+                        if isDeletingAllData {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                .disabled(isDeletingAllData)
+            } header: {
+                Text("Danger Zone")
+            } footer: {
+                Text("Permanently removes all local DomainDig data from this device.")
+            }
         }
+        .disabled(isDeletingAllData)
         .navigationTitle("Data Management")
         .alert("Clear history?", isPresented: $showClearHistoryConfirmation) {
             Button("Clear", role: .destructive) {
@@ -3310,6 +3351,57 @@ private struct DataManagementSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This removes the watchlist and clears monitoring run history. History and workflows stay intact.")
+        }
+        .alert("Delete All Data?", isPresented: $showDeleteAllConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete All Data", role: .destructive) {
+                deleteAllData()
+            }
+        } message: {
+            Text("This will permanently remove all saved DomainDig data from this device. This includes tracked domains, monitoring history, snapshots, exports, cached reports, and local settings. This action cannot be undone.")
+        }
+        .alert("Delete Failed", isPresented: Binding(
+            get: { deleteAllErrorMessage != nil },
+            set: { if !$0 { deleteAllErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteAllErrorMessage ?? "The local data reset could not be completed.")
+        }
+        .safeAreaInset(edge: .bottom) {
+            if let deleteAllSuccessMessage {
+                Text(deleteAllSuccessMessage)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private func deleteAllData() {
+        guard !isDeletingAllData else { return }
+
+        isDeletingAllData = true
+        deleteAllErrorMessage = nil
+        deleteAllSuccessMessage = nil
+
+        Task {
+            do {
+                try await DataResetService.wipeAllLocalData(viewModel: viewModel)
+                deleteAllSuccessMessage = "All local data removed."
+                try? await Task.sleep(for: .seconds(2))
+                if deleteAllSuccessMessage == "All local data removed." {
+                    deleteAllSuccessMessage = nil
+                }
+            } catch {
+                deleteAllErrorMessage = error.localizedDescription
+            }
+
+            isDeletingAllData = false
         }
     }
 }

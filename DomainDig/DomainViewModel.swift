@@ -953,6 +953,46 @@ final class DomainViewModel {
         refreshDataLifecycleSummary()
     }
 
+    func applyLocalDataReset() async {
+        domain = ""
+        bulkInput = ""
+        reset()
+
+        recentSearches = []
+        savedDomains = []
+        trackedDomains = []
+        history = []
+        workflows = []
+        historySearchText = ""
+        historyDateFilter = .all
+        historyChangeFilter = .all
+        historySortOption = .newest
+        timelineGrouping = .relativeDay
+        timelineDomainFilter = ""
+        watchlistSearchText = ""
+        watchlistFilter = .all
+        watchlistSortOption = .pinned
+        dashboardSearchText = ""
+        dashboardFilter = .all
+        monitoringSettings = MonitoringSettings()
+        monitoringLogs = []
+        notificationsAuthorized = false
+        monitoringRunInProgress = false
+        monitoringStatusMessage = nil
+        portabilityStatusMessage = "All local data removed."
+        upgradePrompt = nil
+        isPaywallPresented = false
+        selectedSnapshotIDs.removeAll()
+        activeDomainDiff = nil
+        activeDiffChangeIndex = 0
+        latestBatchSweepSummary = nil
+        latestWorkflowRunSummary = nil
+        historyAutoPruneOption = Self.loadHistoryAutoPruneOption()
+        refreshDataLifecycleSummary()
+        await refreshUsageCredits()
+        await refreshMonitoringAuthorizationStatus()
+    }
+
     func refreshMonitoringAuthorizationStatus() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         monitoringNotificationStatus = settings.authorizationStatus

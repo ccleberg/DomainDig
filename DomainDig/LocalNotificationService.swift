@@ -117,6 +117,12 @@ final class LocalNotificationService {
         )
     }
 
+    func clearAllNotifications() async {
+        let center = UNUserNotificationCenter.current()
+        center.removeAllPendingNotificationRequests()
+        center.removeAllDeliveredNotifications()
+    }
+
     private func schedule(
         identifier: String,
         title: String,

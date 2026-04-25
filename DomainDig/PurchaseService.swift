@@ -196,6 +196,14 @@ final class PurchaseService {
         errorMessage = nil
     }
 
+    func resetCachedStateAfterLocalWipe() {
+        currentTier = Self.cachedTier
+        activeProductID = Self.cachedEntitlement?.activeProductID
+        statusMessage = nil
+        errorMessage = nil
+        applyDebugOverrideIfNeeded()
+    }
+
     private func apply(transaction: Transaction) {
         guard Self.productIDs.contains(transaction.productID), transaction.revocationDate == nil else {
             return

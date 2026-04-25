@@ -1,0 +1,413 @@
+diff --git a/DomainDig.xcodeproj/project.pbxproj b/DomainDig.xcodeproj/project.pbxproj
+index c641a56..2de9125 100644
+--- a/DomainDig.xcodeproj/project.pbxproj
++++ b/DomainDig.xcodeproj/project.pbxproj
+@@ -366,7 +366,7 @@
+ 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+ 				CODE_SIGN_ENTITLEMENTS = DomainDig/DomainDig.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 32;
++				CURRENT_PROJECT_VERSION = 33;
+ 				DEVELOPMENT_TEAM = ZCNAX3VL9D;
+ 				ENABLE_PREVIEWS = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+@@ -383,7 +383,7 @@
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+ 				);
+-				MARKETING_VERSION = 4.0.0;
++				MARKETING_VERSION = 4.1.0;
+ 				PRODUCT_BUNDLE_IDENTIFIER = net.cleberg.DomainDig;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+@@ -403,7 +403,7 @@
+ 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+ 				CODE_SIGN_ENTITLEMENTS = DomainDig/DomainDig.entitlements;
+ 				CODE_SIGN_STYLE = Automatic;
+-				CURRENT_PROJECT_VERSION = 32;
++				CURRENT_PROJECT_VERSION = 33;
+ 				DEVELOPMENT_TEAM = ZCNAX3VL9D;
+ 				ENABLE_PREVIEWS = YES;
+ 				GENERATE_INFOPLIST_FILE = YES;
+@@ -420,7 +420,7 @@
+ 					"$(inherited)",
+ 					"@executable_path/Frameworks",
+ 				);
+-				MARKETING_VERSION = 4.0.0;
++				MARKETING_VERSION = 4.1.0;
+ 				PRODUCT_BUNDLE_IDENTIFIER = net.cleberg.DomainDig;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+diff --git a/DomainDig/CloudSyncService.swift b/DomainDig/CloudSyncService.swift
+index 1cf41d9..2cb4cfe 100644
+--- a/DomainDig/CloudSyncService.swift
++++ b/DomainDig/CloudSyncService.swift
+@@ -321,6 +321,20 @@ final class CloudSyncService {
+         }
+     }
+ 
++    func resetLocalStateAfterWipe() {
++        scheduledSyncTask?.cancel()
++        scheduledSyncTask = nil
++        syncTask?.cancel()
++        syncTask = nil
++
++        let syncEnabled = defaults.bool(forKey: StorageKey.isEnabled)
++        isEnabled = syncEnabled
++        status = CloudSyncStatus(rawValue: defaults.string(forKey: StorageKey.status) ?? "") ?? (syncEnabled ? .synced : .disabled)
++        lastSyncDate = defaults.object(forKey: StorageKey.lastSyncDate) as? Date
++        lastErrorMessage = defaults.string(forKey: StorageKey.lastErrorMessage)
++        detailMessage = defaults.string(forKey: StorageKey.detailMessage) ?? "DomainDig stores synced data in your private iCloud account."
++    }
++
+     func acceptShare(metadata: CKShare.Metadata) async throws {
+         guard let container = cloudKitContainer() else {
+             throw CloudSyncRuntimeError.missingEntitlement
+diff --git a/DomainDig/ContentView.swift b/DomainDig/ContentView.swift
+index c9f40d6..c5c8e50 100644
+--- a/DomainDig/ContentView.swift
++++ b/DomainDig/ContentView.swift
+@@ -261,6 +261,9 @@ struct ContentView: View {
+                 availableDomains: viewModel.batchResults.map(\.domain)
+             )
+         }
++        .sheet(item: manualBatchSummaryBinding) { summary in
++            BatchSweepSummaryView(viewModel: viewModel, summary: summary)
++        }
+         .sheet(isPresented: $showingTimeline) {
+             NavigationStack {
+                 TimelineView(viewModel: viewModel, domain: viewModel.searchedDomain)
+@@ -268,6 +271,19 @@ struct ContentView: View {
+         }
+     }
+ 
++    private var manualBatchSummaryBinding: Binding<BatchSweepSummary?> {
++        Binding(
++            get: {
++                guard let summary = viewModel.latestBatchSweepSummary,
++                      summary.source == .manual else {
++                    return nil
++                }
++                return summary
++            },
++            set: { viewModel.latestBatchSweepSummary = $0 }
++        )
++    }
++
+     private var inputSection: some View {
+         VStack(spacing: appDensity.metrics.cardSpacing + 2) {
+             Picker("Mode", selection: $inputMode) {
+@@ -3257,6 +3273,10 @@ private struct DataManagementSettingsView: View {
+     @State private var showClearCacheConfirmation = false
+     @State private var showClearWorkflowsConfirmation = false
+     @State private var showClearTrackedDomainsConfirmation = false
++    @State private var showDeleteAllConfirmation = false
++    @State private var deleteAllErrorMessage: String?
++    @State private var deleteAllSuccessMessage: String?
++    @State private var isDeletingAllData = false
+ 
+     var body: some View {
+         Form {
+@@ -3277,7 +3297,28 @@ private struct DataManagementSettingsView: View {
+                     showClearTrackedDomainsConfirmation = true
+                 }
+             }
++
++            Section {
++                Button(role: .destructive) {
++                    showDeleteAllConfirmation = true
++                } label: {
++                    HStack {
++                        Text("Delete All Data")
++                        Spacer()
++                        if isDeletingAllData {
++                            ProgressView()
++                                .controlSize(.small)
++                        }
++                    }
++                }
++                .disabled(isDeletingAllData)
++            } header: {
++                Text("Danger Zone")
++            } footer: {
++                Text("Permanently removes all local DomainDig data from this device.")
++            }
+         }
++        .disabled(isDeletingAllData)
+         .navigationTitle("Data Management")
+         .alert("Clear history?", isPresented: $showClearHistoryConfirmation) {
+             Button("Clear", role: .destructive) {
+@@ -3311,6 +3352,57 @@ private struct DataManagementSettingsView: View {
+         } message: {
+             Text("This removes the watchlist and clears monitoring run history. History and workflows stay intact.")
+         }
++        .alert("Delete All Data?", isPresented: $showDeleteAllConfirmation) {
++            Button("Cancel", role: .cancel) {}
++            Button("Delete All Data", role: .destructive) {
++                deleteAllData()
++            }
++        } message: {
++            Text("This will permanently remove all saved DomainDig data from this device. This includes tracked domains, monitoring history, snapshots, exports, cached reports, and local settings. This action cannot be undone.")
++        }
++        .alert("Delete Failed", isPresented: Binding(
++            get: { deleteAllErrorMessage != nil },
++            set: { if !$0 { deleteAllErrorMessage = nil } }
++        )) {
++            Button("OK", role: .cancel) {}
++        } message: {
++            Text(deleteAllErrorMessage ?? "The local data reset could not be completed.")
++        }
++        .safeAreaInset(edge: .bottom) {
++            if let deleteAllSuccessMessage {
++                Text(deleteAllSuccessMessage)
++                    .font(.footnote.weight(.medium))
++                    .foregroundStyle(.secondary)
++                    .padding(.horizontal, 14)
++                    .padding(.vertical, 10)
++                    .background(.thinMaterial, in: Capsule())
++                    .padding(.bottom, 8)
++                    .transition(.move(edge: .bottom).combined(with: .opacity))
++            }
++        }
++    }
++
++    private func deleteAllData() {
++        guard !isDeletingAllData else { return }
++
++        isDeletingAllData = true
++        deleteAllErrorMessage = nil
++        deleteAllSuccessMessage = nil
++
++        Task {
++            do {
++                try await DataResetService.wipeAllLocalData(viewModel: viewModel)
++                deleteAllSuccessMessage = "All local data removed."
++                try? await Task.sleep(for: .seconds(2))
++                if deleteAllSuccessMessage == "All local data removed." {
++                    deleteAllSuccessMessage = nil
++                }
++            } catch {
++                deleteAllErrorMessage = error.localizedDescription
++            }
++
++            isDeletingAllData = false
++        }
+     }
+ }
+ 
+diff --git a/DomainDig/DomainViewModel.swift b/DomainDig/DomainViewModel.swift
+index b65c6df..1d75221 100644
+--- a/DomainDig/DomainViewModel.swift
++++ b/DomainDig/DomainViewModel.swift
+@@ -953,6 +953,46 @@ final class DomainViewModel {
+         refreshDataLifecycleSummary()
+     }
+ 
++    func applyLocalDataReset() async {
++        domain = ""
++        bulkInput = ""
++        reset()
++
++        recentSearches = []
++        savedDomains = []
++        trackedDomains = []
++        history = []
++        workflows = []
++        historySearchText = ""
++        historyDateFilter = .all
++        historyChangeFilter = .all
++        historySortOption = .newest
++        timelineGrouping = .relativeDay
++        timelineDomainFilter = ""
++        watchlistSearchText = ""
++        watchlistFilter = .all
++        watchlistSortOption = .pinned
++        dashboardSearchText = ""
++        dashboardFilter = .all
++        monitoringSettings = MonitoringSettings()
++        monitoringLogs = []
++        notificationsAuthorized = false
++        monitoringRunInProgress = false
++        monitoringStatusMessage = nil
++        portabilityStatusMessage = "All local data removed."
++        upgradePrompt = nil
++        isPaywallPresented = false
++        selectedSnapshotIDs.removeAll()
++        activeDomainDiff = nil
++        activeDiffChangeIndex = 0
++        latestBatchSweepSummary = nil
++        latestWorkflowRunSummary = nil
++        historyAutoPruneOption = Self.loadHistoryAutoPruneOption()
++        refreshDataLifecycleSummary()
++        await refreshUsageCredits()
++        await refreshMonitoringAuthorizationStatus()
++    }
++
+     func refreshMonitoringAuthorizationStatus() async {
+         let settings = await UNUserNotificationCenter.current().notificationSettings()
+         monitoringNotificationStatus = settings.authorizationStatus
+diff --git a/DomainDig/IntegrationService.swift b/DomainDig/IntegrationService.swift
+index 838cfc2..dba8034 100644
+--- a/DomainDig/IntegrationService.swift
++++ b/DomainDig/IntegrationService.swift
+@@ -177,6 +177,28 @@ final class IntegrationService {
+         scheduleProcessing(force: true)
+     }
+ 
++    func localSecretReferences() -> [String] {
++        targets.compactMap { target in
++            switch target.configuration {
++            case .webhook(let configuration):
++                configuration.credentialReference
++            case .slack(let configuration):
++                configuration.credentialReference
++            case .email(let configuration):
++                configuration.credentialReference
++            }
++        }
++    }
++
++    func resetAfterLocalWipe() {
++        processingTask?.cancel()
++        processingTask = nil
++        targets = []
++        deliveryRecords = []
++        queue = []
++        statusMessage = nil
++    }
++
+     private func scheduleProcessing(force: Bool = false) {
+         if force {
+             processingTask?.cancel()
+diff --git a/DomainDig/LocalNotificationService.swift b/DomainDig/LocalNotificationService.swift
+index 93beca5..eef0567 100644
+--- a/DomainDig/LocalNotificationService.swift
++++ b/DomainDig/LocalNotificationService.swift
+@@ -117,6 +117,12 @@ final class LocalNotificationService {
+         )
+     }
+ 
++    func clearAllNotifications() async {
++        let center = UNUserNotificationCenter.current()
++        center.removeAllPendingNotificationRequests()
++        center.removeAllDeliveredNotifications()
++    }
++
+     private func schedule(
+         identifier: String,
+         title: String,
+diff --git a/DomainDig/PurchaseService.swift b/DomainDig/PurchaseService.swift
+index af34a33..dbc31ba 100644
+--- a/DomainDig/PurchaseService.swift
++++ b/DomainDig/PurchaseService.swift
+@@ -196,6 +196,14 @@ final class PurchaseService {
+         errorMessage = nil
+     }
+ 
++    func resetCachedStateAfterLocalWipe() {
++        currentTier = Self.cachedTier
++        activeProductID = Self.cachedEntitlement?.activeProductID
++        statusMessage = nil
++        errorMessage = nil
++        applyDebugOverrideIfNeeded()
++    }
++
+     private func apply(transaction: Transaction) {
+         guard Self.productIDs.contains(transaction.productID), transaction.revocationDate == nil else {
+             return
+diff --git a/DomainDig/WorkflowsView.swift b/DomainDig/WorkflowsView.swift
+index 06ae96b..11273c7 100644
+--- a/DomainDig/WorkflowsView.swift
++++ b/DomainDig/WorkflowsView.swift
+@@ -100,7 +100,8 @@ struct WorkflowsView: View {
+                     title: "No Workflows Yet",
+                     message: "Workflows save a reusable set of domains so repeat inspections take one tap instead of rebuilding the same batch each time.",
+                     suggestion: "Create a workflow for a weekly audit set, customer domains, or a monitoring group.",
+-                    systemImage: "square.stack.3d.down.right"
++                    systemImage: "square.stack.3d.down.right",
++                    showsCardBackground: false
+                 )
+             }
+             .listRowBackground(Color(.systemGray6).opacity(0.5))
+diff --git a/DomainDig/DataResetService.swift b/DomainDig/DataResetService.swift
+new file mode 100644
+index 0000000..e993eba
+--- /dev/null
++++ b/DomainDig/DataResetService.swift
+@@ -0,0 +1,76 @@
++import Foundation
++import Security
++
++enum DataResetService {
++    enum ResetError: LocalizedError {
++        case missingBundleIdentifier
++
++        var errorDescription: String? {
++            switch self {
++            case .missingBundleIdentifier:
++                "DomainDig could not determine its local storage identifier."
++            }
++        }
++    }
++
++    static func wipeAllLocalData(viewModel: DomainViewModel) async throws {
++        let secretReferences = await MainActor.run {
++            IntegrationService.shared.localSecretReferences()
++        }
++
++        try await Task.detached(priority: .userInitiated) {
++            try performPersistentWipe(secretReferences: secretReferences)
++        }.value
++
++        await LookupRuntime.shared.clearCache()
++        await LocalNotificationService.shared.clearAllNotifications()
++        await UsageCreditService.shared.resetForCurrentVersion()
++
++        await MainActor.run {
++            IntegrationService.shared.resetAfterLocalWipe()
++            CloudSyncService.shared.resetLocalStateAfterWipe()
++            PurchaseService.shared.resetCachedStateAfterLocalWipe()
++            _ = DomainMonitoringScheduler.shared.syncSchedule()
++        }
++
++        await viewModel.applyLocalDataReset()
++    }
++
++    private nonisolated static func performPersistentWipe(secretReferences: [String]) throws {
++        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
++            throw ResetError.missingBundleIdentifier
++        }
++
++        for reference in secretReferences {
++            deleteIntegrationSecret(reference: reference)
++        }
++
++        try removeTemporaryFiles()
++
++        let defaults = UserDefaults.standard
++        defaults.removePersistentDomain(forName: bundleIdentifier)
++        defaults.synchronize()
++    }
++
++    private nonisolated static func removeTemporaryFiles() throws {
++        let tempDirectory = FileManager.default.temporaryDirectory
++        let urls = try FileManager.default.contentsOfDirectory(
++            at: tempDirectory,
++            includingPropertiesForKeys: nil,
++            options: [.skipsHiddenFiles]
++        )
++
++        for url in urls {
++            try? FileManager.default.removeItem(at: url)
++        }
++    }
++
++    private nonisolated static func deleteIntegrationSecret(reference: String) {
++        let query: [String: Any] = [
++            kSecClass as String: kSecClassGenericPassword,
++            kSecAttrAccount as String: reference
++        ]
++
++        SecItemDelete(query as CFDictionary)
++    }
++}

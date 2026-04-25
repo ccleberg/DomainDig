@@ -100,7 +100,8 @@ struct WorkflowsView: View {
                     title: "No Workflows Yet",
                     message: "Workflows save a reusable set of domains so repeat inspections take one tap instead of rebuilding the same batch each time.",
                     suggestion: "Create a workflow for a weekly audit set, customer domains, or a monitoring group.",
-                    systemImage: "square.stack.3d.down.right"
+                    systemImage: "square.stack.3d.down.right",
+                    showsCardBackground: false
                 )
             }
             .listRowBackground(Color(.systemGray6).opacity(0.5))
