@@ -4,6 +4,7 @@ private enum RootTab: Hashable {
     case dashboard
     case history
     case inspect
+    case audit
     case settings
 }
 
@@ -37,6 +38,14 @@ struct RootTabView: View {
                     Label("Inspect", systemImage: "magnifyingglass")
                 }
                 .tag(RootTab.inspect)
+
+            NavigationStack {
+                AuditModeView(viewModel: viewModel)
+            }
+            .tabItem {
+                Label("Audit", systemImage: "checklist")
+            }
+            .tag(RootTab.audit)
 
             NavigationStack {
                 SettingsView(viewModel: viewModel)
